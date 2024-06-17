@@ -1,4 +1,4 @@
-#THIS IS A TEST OF V.1
+#THIS IS A TEST OF V.1.1
 import time
 import board
 import busio
