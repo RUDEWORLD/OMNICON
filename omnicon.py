@@ -1,7 +1,8 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# v1.0.0
-# JUNE 18, 2024
+# V2.1.2test
+# UPDATE test
+# JULY 23, 2024
 
 import time
 import board
@@ -15,6 +16,11 @@ import logging
 from gpiozero import Button
 import lgpio
 import threading
+from datetime import datetime
+import os
+import sys
+import psutil  # Added for accurate CPU usage
+import requests
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -62,6 +68,9 @@ command_stop_satellite = "sudo systemctl stop satellite.service"
 # State file
 STATE_FILE = "state.json"
 
+# Global variables
+time_format_24hr = True  # True for 24-hour format, False for 12-hour format
+
 # Function to load state from file
 def load_state():
     def parse_ip_octets(ip):
@@ -75,6 +84,7 @@ def load_state():
             state["static_ip"] = parse_ip_octets(state.get("static_ip", "192.168.0.100"))
             state["subnet_mask"] = parse_ip_octets(state.get("subnet_mask", "255.255.255.0"))
             state["gateway"] = parse_ip_octets(state.get("gateway", "192.168.0.1"))
+            state["time_format_24hr"] = state.get("time_format_24hr", True)
             return state
     except (FileNotFoundError, json.JSONDecodeError):
         return {
@@ -82,7 +92,8 @@ def load_state():
             "network": "STATIC",
             "static_ip": [192, 168, 0, 100],
             "subnet_mask": [255, 255, 255, 0],
-            "gateway": [192, 168, 0, 1]
+            "gateway": [192, 168, 0, 1],
+            "time_format_24hr": True
         }
 
 # Function to save state to file
@@ -240,17 +251,21 @@ debounce_time = 0.05  # Debounce time for button presses
 last_update_time = time.time()  # Initialize the last update time
 
 # Menu options
-main_menu = ["SYSTEM", "NETWORK", "POWER", "EXIT"]
-system_menu = ["COMPANION", "SATELLITE", "", "EXIT"]
+main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
+application_menu = ["COMPANION", "SATELLITE", "", "EXIT"]
+configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
 reboot_confirm_menu = ["CANCEL", "REBOOT"]
 shutdown_confirm_menu = ["CANCEL", "SHUTDOWN"]
 set_static_menu = ["IP ADDRESS", "SUBNET MASK", "GATEWAY", "EXIT"]
+set_datetime_menu = ["CURRENT DATE/TIME", "SET DATE", "SET TIME", "EXIT"]
+update_menu = ["CURRENT: " + "V2.1.0", "UPDATE", "DOWNGRADE", "EXIT"]
 menu_options = {
     "default": main_menu,
     "main": main_menu,
-    "system": system_menu,
+    "application": application_menu,
+    "configuration": configuration_menu,
     "network": network_menu,
     "power": power_menu,
     "set_static": set_static_menu,
@@ -259,6 +274,10 @@ menu_options = {
     "set_static_ip": set_static_menu,
     "set_static_sm": set_static_menu,
     "set_static_gw": set_static_menu,
+    "set_datetime": set_datetime_menu,
+    "update": update_menu,
+    "set_date": [],
+    "set_time": [],
 }
 
 # Button indicators
@@ -271,7 +290,7 @@ indicators = {
 
 # Function to get current network settings
 def get_current_network_settings():
-    ip = subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip()
+    ip = subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip().split()[0]
     subnet = subprocess.check_output(["ip", "-o", "-f", "inet", "addr", "show"]).decode('utf-8')
     subnet = [line.split()[3] for line in subnet.splitlines() if 'eth0' in line]
     subnet = subnet[0].split('/')[1] if subnet else "N/A"
@@ -279,7 +298,7 @@ def get_current_network_settings():
     gateway = subprocess.check_output(["ip", "route", "show", "default"]).decode('utf-8').split()[2]
     dns = subprocess.check_output(["nmcli", "dev", "show"]).decode('utf-8')
     dns_servers = [line.split(':')[-1].strip() for line in dns.splitlines() if 'IP4.DNS' in line]
-    dns = ', '.join(dns_servers)
+    dns = dns_servers[0] if dns_servers else "N/A"
     return ip, subnet, gateway, dns
 
 def cidr_to_subnet_mask(cidr):
@@ -290,15 +309,14 @@ def cidr_to_subnet_mask(cidr):
 def get_pi_health():
     temp = subprocess.check_output(["vcgencmd", "measure_temp"]).decode('utf-8').strip().split('=')[1]
     voltage = subprocess.check_output(["vcgencmd", "measure_volts"]).decode('utf-8').strip().split('=')[1].replace('V', '')
-    cpu_usage = subprocess.check_output(["top", "-bn1"]).decode('utf-8')
-    cpu = [line for line in cpu_usage.split('\n') if "Cpu(s)" in line][0].split()[1]
+    cpu_usage = psutil.cpu_percent(interval=1)  # Using psutil for accurate CPU usage
     memory = subprocess.check_output(["free", "-m"]).decode('utf-8')
     memory = [line for line in memory.split('\n') if "Mem:" in line][0].split()
-    memory_used = memory[2]
-    memory_total = memory[1]
-    memory_percentage = (int(memory_used) / int(memory_total)) * 100
+    memory_used = int(memory[2]) / 1024
+    memory_total = int(memory[1]) / 1024
+    memory_percentage = (memory_used / memory_total) * 100
     watt_input = float(voltage) * 0.85  # Assuming the current draw is approximately 0.85A
-    return temp, voltage, watt_input, cpu, f"{memory_used}/{memory_total}MB {memory_percentage:.2f}%"
+    return temp, voltage, watt_input, cpu_usage, f"{memory_used:.2f}/{memory_total:.2f}GB"
 
 # Function to clear the OLED display before drawing new content
 def clear_display():
@@ -307,7 +325,7 @@ def clear_display():
 
 # Function to update OLED display
 def update_oled_display():
-    global blink_state, gateway, update_flag, last_update_time
+    global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr
     current_time = time.time()
     if not update_flag or (current_time - last_update_time) < LOOPTIME:
         return
@@ -323,6 +341,8 @@ def update_oled_display():
     clear_display()
 
     if menu_state == "default":
+        current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
+        current_time = datetime.now().strftime(current_time_format)
         # Shell scripts for system monitoring
         cmd = "hostname -I | cut -d\' \' -f1"
         IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
@@ -358,12 +378,13 @@ def update_oled_display():
         title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
 
         # Pi Stats Display
-        local_draw.text((title_x, 0), title, font=font15, fill=255)
-        local_draw.text((85, 32), Temp, font=font12, fill=255)
-        local_draw.text((0, 32), EthProfile, font=font12, fill=255)
+        local_draw.text((0, 0), f"{title}", font=font12, fill=255)
+        local_draw.text((90, 0), EthProfile, font=font11, fill=255)
         local_draw.text((0, 16), IP, font=font11, fill=255)
         local_draw.text((95, 16), port, font=font11, fill=255)
-        local_draw.text((0, 48), "OMNICONPRO.COM /help", font=font10, fill=255)
+        local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
+        local_draw.text((90, 32), Temp, font=font11, fill=255)
+        local_draw.text((0, 48), "UPDATE WORKED! v2.1.2/ help", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -407,10 +428,71 @@ def update_oled_display():
     
     elif menu_state == "show_pi_health":
         temp, voltage, watt_input, cpu, memory = get_pi_health()
-        local_draw.text((0, 0), f"Temp: {temp}", font=font11, fill=255)
-        local_draw.text((0, 16), f"Voltage: {voltage}V", font=font11, fill=255)
-        local_draw.text((0, 32), f"Watt: {watt_input:.2f}W CPU: {cpu}", font=font11, fill=255)
-        local_draw.text((0, 48), f"RAM: {memory}", font=font11, fill=255)
+        current_datetime = datetime.now().strftime("%m/%d/%y  %H:%M" if time_format_24hr else "%m/%d/%y  %I:%M %p")
+        local_draw.text((0, 0), f" {current_datetime}", font=font12, fill=255)
+        local_draw.text((12, 16), f"RAM: {memory}", font=font11, fill=255)
+        local_draw.text((11, 32), f"V: {voltage}   W: {watt_input:.2f}", font=font11, fill=255)
+        local_draw.text((39, 48), f"CPU: {cpu:.2f}%", font=font11, fill=255)
+
+    elif menu_state == "set_date":
+        date_display = datetime_temp.strftime("%m/%d/%y")
+        if blink_state:
+            if ip_octet == 0:
+                date_display = f"[{date_display[:2]}]{date_display[2:]}"
+            elif ip_octet == 1:
+                date_display = f"{date_display[:3]}[{date_display[3:5]}]{date_display[5:]}"
+            elif ip_octet == 2:
+                date_display = f"{date_display[:6]}[{date_display[6:]}]"
+        else:
+            date_display = datetime_temp.strftime("%m/%d/%y")
+        local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
+        local_draw.text((35, 16), date_display, font=font12, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+
+    elif menu_state == "set_time":
+        time_format_display = "24hr" if time_format_24hr else "12hr"
+        time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
+        am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
+        
+        if blink_state:
+            if ip_octet == 0:
+                time_format_display = f"[{time_format_display}]"
+            elif ip_octet == 1:
+                time_display = f"[{time_display[:2]}]{time_display[2:]}"
+            elif ip_octet == 2:
+                time_display = f"{time_display[:3]}[{time_display[3:]}]"
+            elif ip_octet == 3 and not time_format_24hr:
+                am_pm_display = f"[{am_pm_display}]"
+        else:
+            time_format_display = "24hr" if time_format_24hr else "12hr"
+            time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
+            am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
+
+        local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
+        local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+
+    elif menu_state == "set_datetime":
+        current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
+        local_draw.text((0, 0), f"{current_datetime}", font=font12, fill=255)
+        local_draw.text((0, 16), "SET DATE", font=font12, fill=255)
+        local_draw.text((0, 32), "SET TIME", font=font12, fill=255)
+        local_draw.text((0, 48), "EXIT", font=font12, fill=255)
+        local_draw.text((112, 16), indicators["K2"], font=font11, fill=255)  # Down button for SET DATE
+        local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)  # Left button for SET TIME
+        local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)  # Right button for EXIT
+
+    elif menu_state == "update":
+        for i, option in enumerate(update_menu):
+            if option:
+                if i == 0:
+                    local_draw.text((0, i * 16), option, font=font11, fill=255)
+                else:
+                    suffix = indicators[f"K{i+1}"]
+                    local_draw.text((0, i * 16), option, font=font11, fill=255)
+                    local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
     else:
         options = menu_options[menu_state]
@@ -421,7 +503,7 @@ def update_oled_display():
                 if menu_state == "network":
                     if (option == "DHCP" and state["network"] == DHCP_PROFILE) or (option == "STATIC IP" and state["network"] == STATIC_PROFILE):
                         prefix = "*"
-                if menu_state == "system":
+                if menu_state == "application":
                     if (option == "COMPANION" and is_service_active("companion.service")) or (option == "SATELLITE" and is_service_active("satellite.service")):
                         prefix = "*"
                 suffix = indicators[f"K{i+1}"]
@@ -435,13 +517,14 @@ def update_oled_display():
     logging.debug("OLED display updated")
 
 def reset_to_main():
-    global menu_state, ip_address, subnet_mask, gateway, timeout_flag
+    global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp
     if not timeout_flag:
         logging.debug("Timeout: Resetting to main display")
         menu_state = "default"
         ip_address = original_ip_address[:]
         subnet_mask = original_subnet_mask[:]
         gateway = original_gateway[:]
+        datetime_temp = datetime.now()
         update_oled_display()
         timeout_flag = True
 
@@ -458,7 +541,7 @@ def debounce(func):
 # Button event handlers with debounce
 @debounce
 def button_k1_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     logging.debug("K1 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
@@ -475,6 +558,10 @@ def button_k1_pressed():
         subnet_mask[ip_octet] = (subnet_mask[ip_octet] + 1) % 256
     elif menu_state == "set_static_gw":
         gateway[ip_octet] = (gateway[ip_octet] + 1) % 256
+    elif menu_state == "set_date":
+        update_date(1)
+    elif menu_state == "set_time":
+        update_time(1)
     else:
         menu_selection = 0
         activate_menu_item()
@@ -482,7 +569,7 @@ def button_k1_pressed():
 
 @debounce
 def button_k2_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     logging.debug("K2 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
@@ -499,6 +586,10 @@ def button_k2_pressed():
         subnet_mask[ip_octet] = (subnet_mask[ip_octet] - 1) % 256
     elif menu_state == "set_static_gw":
         gateway[ip_octet] = (gateway[ip_octet] - 1) % 256
+    elif menu_state == "set_date":
+        update_date(-1)
+    elif menu_state == "set_time":
+        update_time(-1)
     else:
         menu_selection = 1
         activate_menu_item()
@@ -515,8 +606,8 @@ def button_k3_pressed():
         reset_to_main()
     elif menu_state == "default":
         menu_state = "show_pi_health"
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
-        ip_octet = (ip_octet - 1) % 4
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
     else:
         menu_selection = 2
         activate_menu_item()
@@ -531,10 +622,8 @@ def button_k4_pressed():
     
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state == "default":
-        menu_state = "show_network_info"
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
-        ip_octet = (ip_octet + 1) % 4
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
     else:
         menu_selection = 3
         activate_menu_item()
@@ -550,11 +639,12 @@ def hold_k3():
         subnet_mask = original_subnet_mask[:]
         gateway = original_gateway[:]
         menu_state = "set_static"
-        menu_selection = 0
+    elif menu_state in ["set_date", "set_time"]:
+        menu_state = "set_datetime"
     update_oled_display()  # Update the display immediately after change
 
 def hold_k4():
-    global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time
+    global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr
     logging.debug("K4 held for 1 seconds")
     last_interaction_time = time.time()
     
@@ -565,7 +655,13 @@ def hold_k4():
         original_subnet_mask = subnet_mask[:]
         original_gateway = gateway[:]
         menu_state = "set_static"
-        menu_selection = 0
+    elif menu_state in ["set_date", "set_time"]:
+        set_system_datetime(datetime_temp)
+        state = load_state()
+        state["time_format_24hr"] = time_format_24hr
+        save_state(state)
+        update_clock_format(time_format_24hr)  # Add this line to update the clock format
+        restart_script()
     update_oled_display()  # Update the display immediately after change
 
 def save_static_settings():
@@ -588,6 +684,47 @@ def apply_static_settings():
     execute_command(f"sudo nmcli connection up {STATIC_PROFILE}")
     logging.info("Static IP settings applied to the network profile.")
 
+def update_date(increment):
+    global datetime_temp
+    if ip_octet == 0:
+        new_month = (datetime_temp.month + increment - 1) % 12 + 1
+        datetime_temp = datetime_temp.replace(month=new_month)
+    elif ip_octet == 1:
+        new_day = (datetime_temp.day + increment - 1) % 31 + 1
+        datetime_temp = datetime_temp.replace(day=new_day)
+    elif ip_octet == 2:
+        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
+
+def update_time(increment):
+    global datetime_temp, time_format_24hr
+    if ip_octet == 0:
+        time_format_24hr = not time_format_24hr
+    elif ip_octet == 1:
+        new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
+        if new_hour == 0 and not time_format_24hr:
+            new_hour = 12
+        datetime_temp = datetime_temp.replace(hour=new_hour)
+    elif ip_octet == 2:
+        new_minute = (datetime_temp.minute + increment) % 60
+        datetime_temp = datetime_temp.replace(minute(new_minute))
+    elif ip_octet == 3 and not time_format_24hr:
+        am_pm = datetime_temp.strftime("%p")
+        if am_pm == "AM":
+            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
+        else:
+            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+
+def set_system_datetime(datetime_temp):
+    date_str = datetime_temp.strftime("%Y-%m-%d")
+    time_str = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M %p")
+    execute_command(f"sudo date --set='{date_str}'")
+    execute_command(f"sudo date --set='{time_str}'")
+
+def restart_script():
+    """Restarts the current script."""
+    logging.info("Restarting script...")
+    os.execv(sys.executable, ['python3'] + sys.argv)
+
 def subnet_mask_to_cidr(mask):
     mask_octets = map(int, mask.split('.'))
     binary_str = ''.join([bin(octet).lstrip('0b').zfill(8) for octet in mask_octets])
@@ -602,14 +739,101 @@ def turn_off_oled():
     oled.show()
     oled.poweroff()
 
+def update_clock_format(time_format_24hr):
+    config_file_path = os.path.expanduser("~/.config/wf-panel-pi.ini")
+    
+    # Read the configuration file
+    with open(config_file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Modify the clock_format line
+    with open(config_file_path, 'w') as file:
+        for line in lines:
+            if line.startswith('clock_format'):
+                if time_format_24hr:
+                    file.write('clock_format=%H:%M:%S\n')
+                else:
+                    file.write('clock_format=%I:%M:%S %p\n')
+            else:
+                file.write(line)
+
+    # Restart the panel or system to apply changes
+    # You might need to adapt this command to restart your specific panel if `lxpanelctl` is not applicable
+    subprocess.run(['lxpanelctl', 'restart'], check=True)
+    logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
+
+def get_current_version():
+    with open("/home/omnicon/OLED_Stats/omnicon.py", "r") as file:
+        for line in file:
+            if line.startswith("# V"):
+                return line.strip().split(' ')[1]
+    return "Unknown"
+
+def download_file_from_github(url, local_path):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        with open(local_path, 'w', encoding='utf-8') as file:  # Ensure UTF-8 encoding is used
+            file.write(response.text)
+        logging.info(f"Downloaded and saved: {local_path}")
+        return True
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to download the script: {e}")
+        return False
+
+def update_omnicon():
+    url = "https://raw.githubusercontent.com/RUDEWORLD/OMNICON/main/%20omnicon.py"
+    local_path = "/home/omnicon/OLED_Stats/omnicon.py"
+    if download_file_from_github(url, local_path):
+        return "OMNICON UPDATED"
+    else:
+        return "UPDATE FAILED"
+
+def check_for_update():
+    current_version = get_current_version()
+    url = "https://raw.githubusercontent.com/RUDEWORLD/OMNICON/main/%20omnicon.py"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        for line in response.text.split('\n'):
+            if line.startswith("# V"):
+                latest_version = line.strip().split(' ')[1]
+                break
+        else:
+            latest_version = "Unknown"
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to check for update: {e}")
+        latest_version = "Unknown"
+
+    if current_version == latest_version:
+        return "OMNICON IS UP TO DATE"
+    else:
+        return "UPDATE AVAILABLE"
+
+def downgrade_omnicon():
+    url = "https://raw.githubusercontent.com/RUDEWORLD/OMNICON/main/%20omnicon.py"
+    local_path = "/home/omnicon/OLED_Stats/omnicon.py"
+    if download_file_from_github(url, local_path):
+        return "OMNICON DOWNGRADED"
+    else:
+        return "DOWNGRADE FAILED"
+
 # Update OLED display in a separate thread
 def update_oled():
     while True:
+        # Wait for the start of the next second
+        now = datetime.now()
+        sleep_time = 1 - now.microsecond / 1_000_000
+        time.sleep(sleep_time)
         update_oled_display()
-        time.sleep(LOOPTIME)
 
 def main():
+    global datetime_temp, time_format_24hr
     initial_setup()
+    datetime_temp = datetime.now()
+
+    state = load_state()
+    time_format_24hr = state.get("time_format_24hr", True)
 
     button_k1.when_pressed = button_k1_pressed
     button_k2.when_pressed = button_k2_pressed
@@ -618,7 +842,6 @@ def main():
 
     button_k1.when_held = lambda: fast_adjust_ip(button_k1, 10)  # Change value by 10 when held
     button_k2.when_held = lambda: fast_adjust_ip(button_k2, -10)  # Change value by 10 when held
-
 
     button_k3.when_held = hold_k3
     button_k4.when_held = hold_k4
@@ -637,7 +860,7 @@ def main():
         time.sleep(.1)  # Check every 100ms
 
 def fast_adjust_ip(button, increment):
-    global menu_state, ip_octet, ip_address, subnet_mask, gateway
+    global menu_state, ip_octet, ip_address, subnet_mask, gateway, datetime_temp
     start_time = time.time()
     while button.is_held:
         if menu_state == "set_static_ip":
@@ -646,9 +869,12 @@ def fast_adjust_ip(button, increment):
             subnet_mask[ip_octet] = (subnet_mask[ip_octet] + increment) % 256
         elif menu_state == "set_static_gw":
             gateway[ip_octet] = (gateway[ip_octet] + increment) % 256
+        elif menu_state == "set_date":
+            update_date(increment)
+        elif menu_state == "set_time":
+            update_time(increment)
         update_oled_display()  # Update the display immediately to show the changing values
         time.sleep(.6)  # Reduce sleep time to make the changes more responsive
-
 
 def check_timeout():
     global last_interaction_time
@@ -658,16 +884,16 @@ def check_timeout():
         time.sleep(1)
 
 def activate_menu_item():
-    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp
     options = menu_options[menu_state]
     selected_option = options[menu_selection]
 
     if menu_state == "main":
-        if selected_option == "SYSTEM":
-            menu_state = "system"
+        if selected_option == "APPLICATION":
+            menu_state = "application"
             menu_selection = 0
-        elif selected_option == "NETWORK":
-            menu_state = "network"
+        elif selected_option == "CONFIGURATION":
+            menu_state = "configuration"
             menu_selection = 0
         elif selected_option == "POWER":
             menu_state = "power"
@@ -676,13 +902,27 @@ def activate_menu_item():
             menu_state = "default"
             menu_selection = 0
 
-    elif menu_state == "system":
+    elif menu_state == "application":
         if selected_option == "COMPANION":
             toggle_service("companion")
             menu_state = "default"
         elif selected_option == "SATELLITE":
             toggle_service("satellite")
             menu_state = "default"
+        elif selected_option == "EXIT":
+            menu_state = "default"
+
+    elif menu_state == "configuration":
+        if selected_option == "NETWORK":
+            menu_state = "network"
+            menu_selection = 0
+        elif selected_option == "SET DATE/TIME":
+            menu_state = "set_datetime"
+            menu_selection = 0
+            datetime_temp = datetime.now()
+        elif selected_option == "UPDATE":
+            menu_state = "update"
+            menu_selection = 1
         elif selected_option == "EXIT":
             menu_state = "default"
 
@@ -697,7 +937,11 @@ def activate_menu_item():
             menu_state = "set_static"
             menu_selection = 0
         elif selected_option == "EXIT":
+            ip_address = original_ip_address[:]
+            subnet_mask = original_subnet_mask[:]
+            gateway = original_gateway[:]
             menu_state = "default"
+            menu_selection = 0
 
     elif menu_state == "power":
         if selected_option == "REBOOT":
@@ -742,8 +986,40 @@ def activate_menu_item():
             menu_state = "default"
             menu_selection = 0
 
+    elif menu_state == "set_datetime":
+        if selected_option == "SET DATE":
+            menu_state = "set_date"
+            ip_octet = 0
+        elif selected_option == "SET TIME":
+            menu_state = "set_time"
+            ip_octet = 0
+        elif selected_option == "EXIT":
+            menu_state = "default"
+            menu_selection = 0
+
+    elif menu_state == "update":
+        if selected_option == "UPDATE":
+            update_result = update_omnicon()
+            show_message(update_result, 5)
+            menu_state = "default"
+        elif selected_option == "DOWNGRADE":
+            downgrade_result = downgrade_omnicon()
+            show_message(downgrade_result, 5)
+            menu_state = "default"
+        elif selected_option == "EXIT":
+            menu_state = "default"
+
     logging.debug(f"Activated menu item: {selected_option}")
     update_oled_display()
+
+def show_message(message, duration):
+    global timeout_flag
+    clear_display()
+    draw.text((0, 0), message, font=font12, fill=255)
+    oled.image(image.rotate(180))
+    oled.show()
+    time.sleep(duration)
+    timeout_flag = True
 
 if __name__ == "__main__":
     try:
