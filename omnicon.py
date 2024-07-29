@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# V6
+# V2.1.0
 # JULY 23, 2024
 
 import time
@@ -284,10 +284,10 @@ menu_options = {
 
 # Button indicators
 indicators = {
-    "K1": "â²",
-    "K2": "â¼",
-    "K3": "â€",
-    "K4": "â¶"
+    "K1": "▲",
+    "K2": "▼",
+    "K3": "◀",
+    "K4": "▶"
 }
 
 # Function to get current network settings
@@ -386,7 +386,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "V6 WINNER", font=font10, fill=255)
+        local_draw.text((0, 48), "OMNICONPRO.COM/ help", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -396,8 +396,8 @@ def update_oled_display():
             ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_sm":
         sm_display = [f"{sm:03}" for sm in subnet_mask]
@@ -407,8 +407,8 @@ def update_oled_display():
             sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_gw":
         gw_display = [f"{gw:03}" for gw in gateway]
@@ -418,8 +418,8 @@ def update_oled_display():
             gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "show_network_info":
         ip, subnet, gateway, dns = get_current_network_settings()
@@ -449,8 +449,8 @@ def update_oled_display():
             date_display = datetime_temp.strftime("%m/%d/%y")
         local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
         local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_time":
         time_format_display = "24hr" if time_format_24hr else "12hr"
@@ -473,8 +473,8 @@ def update_oled_display():
 
         local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
         local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_datetime":
         current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
@@ -695,12 +695,12 @@ def update_date(increment):
     global datetime_temp
     if ip_octet == 0:
         new_month = (datetime_temp.month + increment - 1) % 12 + 1
-        datetime_temp = datetime_temp.replace(month(new_month))
+        datetime_temp = datetime_temp.replace(month=new_month)
     elif ip_octet == 1:
         new_day = (datetime_temp.day + increment - 1) % 31 + 1
-        datetime_temp = datetime_temp.replace(day(new_day))
+        datetime_temp = datetime_temp.replace(day=new_day)
     elif ip_octet == 2:
-        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
+        datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
@@ -710,10 +710,10 @@ def update_time(increment):
         new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
         if new_hour == 0 and not time_format_24hr:
             new_hour = 12
-        datetime_temp = datetime_temp.replace(hour(new_hour))
+        datetime_temp = datetime_temp.replace(hour=new_hour)
     elif ip_octet == 2:
         new_minute = (datetime_temp.minute + increment) % 60
-        datetime_temp = datetime_temp.replace(minute(new_minute))
+        datetime_temp = datetime_temp.replace(minute=new_minute)
     elif ip_octet == 3 and not time_format_24hr:
         am_pm = datetime_temp.strftime("%p")
         if am_pm == "AM":
@@ -771,8 +771,8 @@ def update_clock_format(time_format_24hr):
 
 def get_current_version():
     with open("/home/omnicon/OLED_Stats/omnicon.py", "r") as file:
-        for line in file:
-            if line.startswith("# V"):
+        for i, line in enumerate(file):
+            if i == 2 and line.startswith("# V"):
                 return line.strip().split(' ')[1]
     return "Unknown"
 
@@ -838,12 +838,16 @@ def update_oled():
         update_oled_display()
 
 def main():
-    global datetime_temp, time_format_24hr
+    global datetime_temp, time_format_24hr, update_menu
     initial_setup()
     datetime_temp = datetime.now()
 
     state = load_state()
     time_format_24hr = state.get("time_format_24hr", True)
+
+    # Get current version for the update menu
+    current_version = get_current_version()
+    update_menu[0] = f"CURRENT: {current_version}"
 
     button_k1.when_pressed = button_k1_pressed
     button_k2.when_pressed = button_k2_pressed
