@@ -1,8 +1,8 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# V2.0.1
+# v2.0.2
 # JULY 29, 2024
-# ADDED SUPPORT FOR CLOCK AND DATE. ADDED SUPPORT FOR UPDATES. FIXED NETWORK DISPLAY.
+# Made updates work with variable?
 
 import time
 import board
@@ -630,8 +630,6 @@ def button_k4_pressed():
     
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state == "default":
-        menu_state = "show_network_info"
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
     else:
@@ -703,7 +701,7 @@ def update_date(increment):
         new_day = (datetime_temp.day + increment - 1) % 31 + 1
         datetime_temp = datetime_temp.replace(day=new_day)
     elif ip_octet == 2:
-        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
+        datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
@@ -716,13 +714,14 @@ def update_time(increment):
         datetime_temp = datetime_temp.replace(hour=new_hour)
     elif ip_octet == 2:
         new_minute = (datetime_temp.minute + increment) % 60
-        datetime_temp = datetime_temp.replace(minute(new_minute))
+        datetime_temp = datetime_temp.replace(minute=new_minute)
     elif ip_octet == 3 and not time_format_24hr:
         am_pm = datetime_temp.strftime("%p")
         if am_pm == "AM":
             datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
         else:
             datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+
 
 def set_system_datetime(datetime_temp):
     date_str = datetime_temp.strftime("%Y-%m-%d")
@@ -803,6 +802,18 @@ def fetch_github_tags():
         logging.error(f"Failed to fetch tags from GitHub: {e}")
         return []
 
+def filter_versions(current_version, versions, upgrade=True):
+    current_version_tuple = tuple(map(int, current_version.lstrip('V').split('.')))
+    filtered_versions = []
+    for v in versions:
+        try:
+            version_tuple = tuple(map(int, v.lstrip('vV').split('.')))
+            if (upgrade and version_tuple > current_version_tuple) or (not upgrade and version_tuple < current_version_tuple):
+                filtered_versions.append(v)
+        except ValueError:
+            logging.warning(f"Skipping invalid version format: {v}")
+    return filtered_versions
+
 def update_omnicon():
     global available_versions
     if not available_versions:
@@ -811,6 +822,10 @@ def update_omnicon():
             return "NO TAGS FOUND"
     selected_version = available_versions[menu_selection]
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
+    current_version = get_current_version()
+    if selected_version == current_version:
+        show_message("OMNICON IS UP TO DATE", 10)
+        return "OMNICON IS UP TO DATE"
     if download_file_from_github(selected_version, local_path):
         restart_script()
         return "OMNICON UPDATED"
@@ -900,8 +915,19 @@ def check_timeout():
             reset_to_main()
         time.sleep(1)
 
+# Add this function to reset menu selection if it goes out of range
+def reset_menu_selection():
+    global menu_selection
+    options = menu_options[menu_state]
+    if menu_selection >= len(options):
+        menu_selection = 0
+
+# Modify the `activate_menu_item` function
 def activate_menu_item():
     global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp, available_versions
+
+    reset_menu_selection()  # Ensure menu_selection is valid
+
     options = menu_options[menu_state]
     selected_option = options[menu_selection]
 
@@ -940,8 +966,9 @@ def activate_menu_item():
         elif selected_option == "UPDATE":
             available_versions = fetch_github_tags()
             if available_versions:
-                menu_options["upgrade_select"] = available_versions[:3] + ["EXIT"]
-                menu_options["downgrade_select"] = available_versions[:3] + ["EXIT"]
+                current_version = get_current_version()
+                menu_options["upgrade_select"] = filter_versions(current_version, available_versions, upgrade=True)[:3] + ["EXIT"]
+                menu_options["downgrade_select"] = filter_versions(current_version, available_versions, upgrade=False)[:3] + ["EXIT"]
             menu_state = "update"
             menu_selection = 0
         elif selected_option == "EXIT":
@@ -1035,7 +1062,7 @@ def activate_menu_item():
             menu_selection = 0
         else:
             update_result = update_omnicon()
-            show_message(update_result, 5)
+            show_message(update_result, 10)  # Show message for 10 seconds
             menu_state = "default"
             menu_selection = 0
 
@@ -1051,6 +1078,102 @@ def activate_menu_item():
 
     logging.debug(f"Activated menu item: {selected_option}")
     update_oled_display()
+
+# Call reset_menu_selection() whenever menu_state or menu_selection changes
+@debounce
+def button_k1_pressed():
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
+    logging.debug("K1 pressed")
+    last_interaction_time = time.time()
+    timeout_flag = False
+
+    if menu_state in ["show_network_info", "show_pi_health"]:
+        reset_to_main()
+    elif menu_state == "default":
+        logging.debug("Switching from default to main menu via K1")
+        menu_state = "main"
+        menu_selection = 0
+    elif menu_state == "set_static_ip":
+        ip_address[ip_octet] = (ip_address[ip_octet] + 1) % 256
+    elif menu_state == "set_static_sm":
+        subnet_mask[ip_octet] = (subnet_mask[ip_octet] + 1) % 256
+    elif menu_state == "set_static_gw":
+        gateway[ip_octet] = (gateway[ip_octet] + 1) % 256
+    elif menu_state == "set_date":
+        update_date(1)
+    elif menu_state == "set_time":
+        update_time(1)
+    else:
+        menu_selection = 0
+        activate_menu_item()
+    reset_menu_selection()
+    update_oled_display()
+
+@debounce
+def button_k2_pressed():
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
+    logging.debug("K2 pressed")
+    last_interaction_time = time.time()
+    timeout_flag = False
+    
+    if menu_state in ["show_network_info", "show_pi_health"]:
+        reset_to_main()
+    elif menu_state == "default":
+        logging.debug("Switching from default to main menu via K2")
+        menu_state = "main"
+        menu_selection = 0
+    elif menu_state == "set_static_ip":
+        ip_address[ip_octet] = (ip_address[ip_octet] - 1) % 256
+    elif menu_state == "set_static_sm":
+        subnet_mask[ip_octet] = (subnet_mask[ip_octet] - 1) % 256
+    elif menu_state == "set_static_gw":
+        gateway[ip_octet] = (gateway[ip_octet] - 1) % 256
+    elif menu_state == "set_date":
+        update_date(-1)
+    elif menu_state == "set_time":
+        update_time(-1)
+    else:
+        menu_selection = 1
+        activate_menu_item()
+    reset_menu_selection()
+    update_oled_display()
+
+@debounce
+def button_k3_pressed():
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
+    logging.debug("K3 pressed")
+    last_interaction_time = time.time()
+    timeout_flag = False
+    
+    if menu_state in ["show_network_info", "show_pi_health"]:
+        reset_to_main()
+    elif menu_state == "default":
+        menu_state = "show_pi_health"
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
+    else:
+        menu_selection = 2
+        activate_menu_item()
+    reset_menu_selection()
+    update_oled_display()
+
+@debounce
+def button_k4_pressed():
+    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
+    logging.debug("K4 pressed")
+    last_interaction_time = time.time()
+    timeout_flag = False
+    
+    if menu_state in ["show_network_info", "show_pi_health"]:
+        reset_to_main()
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
+    else:
+        menu_selection = 3
+        activate_menu_item()
+    reset_menu_selection()
+    update_oled_display()
+
 
 def show_message(message, duration):
     global timeout_flag
