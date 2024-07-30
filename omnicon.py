@@ -1,8 +1,8 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# V3.3.1
+# V3.3.2
 # JULY 29, 2024
-# Made updates work with variable?
+
 
 import time
 import board
@@ -71,7 +71,7 @@ STATE_FILE = "state.json"
 # Global variables
 time_format_24hr = True  # True for 24-hour format, False for 12-hour format
 available_versions = []  # To store fetched versions
-update_menu = ["CURRENT: " + "V2.1.0", "UPDATE", "DOWNGRADE", "EXIT"]
+update_menu = ["CURRENT: " + "V2.1.0", "UPGRADE", "DOWNGRADE", "EXIT"]
 
 # Function to load state from file
 def load_state():
@@ -389,7 +389,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "V3.3.1", font=font15, fill=255)
+        local_draw.text((0, 48), "OMNICONPRO.COM / help", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -492,7 +492,7 @@ def update_oled_display():
     elif menu_state == "update":
         for i, option in enumerate(update_menu):
             if option:
-                suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                suffix = indicators.get(f"K{i+1}", "") if i > 0 else ""  # Remove indicator from the current version line
                 local_draw.text((0, i * 16), option, font=font11, fill=255)
                 local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
@@ -525,6 +525,7 @@ def update_oled_display():
     blink_state = not blink_state
     update_flag = True
     logging.debug("OLED display updated")
+
 
 def reset_to_main():
     global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp
