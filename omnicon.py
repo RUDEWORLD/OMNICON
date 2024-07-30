@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# V3.3.2
+# V3.3.3
 # JULY 29, 2024
 
 
@@ -194,7 +194,7 @@ HEIGHT = 64
 BORDER = 5
 
 # Display Refresh
-LOOPTIME = 0.5  # Refresh rate reduced to 0.5 seconds
+LOOPTIME = 0.05  # Refresh rate reduced to 0.5 seconds
 
 # Use for I2C.
 i2c = board.I2C()
@@ -1054,10 +1054,27 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "update":
-        if selected_option == "UPDATE":
-            menu_state = "upgrade_select"
-            menu_selection = 0
+        if selected_option == "UPGRADE":
+            available_versions = fetch_github_tags()
+            if available_versions:
+                current_version = get_current_version()
+                upgrade_versions = filter_versions(current_version, available_versions, upgrade=True)
+                if not upgrade_versions:
+                    show_message("YOU'RE UP TO DATE", 3)
+                    menu_state = "default"
+                    return
+                menu_options["upgrade_select"] = upgrade_versions[:3] + ["EXIT"]
+                menu_state = "upgrade_select"
+                menu_selection = 0
+            else:
+                show_message("NO TAGS FOUND", 3)
+                menu_state = "default"
+                return
         elif selected_option == "DOWNGRADE":
+            available_versions = fetch_github_tags()
+            if available_versions:
+                current_version = get_current_version()
+                menu_options["downgrade_select"] = filter_versions(current_version, available_versions, upgrade=False)[:3] + ["EXIT"]
             menu_state = "downgrade_select"
             menu_selection = 0
         elif selected_option == "EXIT":
@@ -1085,6 +1102,9 @@ def activate_menu_item():
 
     logging.debug(f"Activated menu item: {selected_option}")
     update_oled_display()
+
+
+
 
 def show_message(message, duration):
     global timeout_flag
