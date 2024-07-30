@@ -1,8 +1,8 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# V2.0.0
+# V2.0.1
 # JULY 29, 2024
-# ADDED SUPPORT FOR CLOCK AND DATE. ADDED SUPPORT FOR UPDATES
+# ADDED SUPPORT FOR CLOCK AND DATE. ADDED SUPPORT FOR UPDATES. FIXED NETWORK DISPLAY.
 
 import time
 import board
@@ -630,6 +630,8 @@ def button_k4_pressed():
     
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
+    elif menu_state == "default":
+        menu_state = "show_network_info"
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
     else:
@@ -701,7 +703,7 @@ def update_date(increment):
         new_day = (datetime_temp.day + increment - 1) % 31 + 1
         datetime_temp = datetime_temp.replace(day=new_day)
     elif ip_octet == 2:
-        datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
+        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
@@ -714,7 +716,7 @@ def update_time(increment):
         datetime_temp = datetime_temp.replace(hour=new_hour)
     elif ip_octet == 2:
         new_minute = (datetime_temp.minute + increment) % 60
-        datetime_temp = datetime_temp.replace(minute=new_minute)
+        datetime_temp = datetime_temp.replace(minute(new_minute))
     elif ip_octet == 3 and not time_format_24hr:
         am_pm = datetime_temp.strftime("%p")
         if am_pm == "AM":
