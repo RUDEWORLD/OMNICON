@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI AND MONO PI
-# v2.0.2
+# V2.0.000
 # JULY 29, 2024
 # Made updates work with variable?
 
@@ -387,7 +387,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "OMNICONPRO.COM / help", font=font10, fill=255)
+        local_draw.text((0, 48), "V2.0.000", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
