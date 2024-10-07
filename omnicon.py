@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI & HUB
-# V3.3.8
+# V3.3.6
 # OCT 07, 2024
 
 import time
@@ -286,10 +286,10 @@ menu_options = {
 
 # Button indicators
 indicators = {
-    "K1": "â²",
-    "K2": "â¼",
-    "K3": "â€",
-    "K4": "â¶"
+    "K1": "▲",
+    "K2": "▼",
+    "K3": "◀",
+    "K4": "▶"
 }
 
 # Function to get current network settings
@@ -388,7 +388,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "3.3.8 TEST", font=font10, fill=255)
+        local_draw.text((0, 48), "TEST V3.3.6", font=font12, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -398,8 +398,8 @@ def update_oled_display():
             ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_sm":
         sm_display = [f"{sm:03}" for sm in subnet_mask]
@@ -409,8 +409,8 @@ def update_oled_display():
             sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_gw":
         gw_display = [f"{gw:03}" for gw in gateway]
@@ -420,8 +420,8 @@ def update_oled_display():
             gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "show_network_info":
         ip, subnet, gateway, dns = get_current_network_settings()
@@ -451,8 +451,8 @@ def update_oled_display():
             date_display = datetime_temp.strftime("%m/%d/%y")
         local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
         local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_time":
         time_format_display = "24hr" if time_format_24hr else "12hr"
@@ -475,8 +475,8 @@ def update_oled_display():
 
         local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
         local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_datetime":
         current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
