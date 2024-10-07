@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.1.3
+# V3.2.1
 # 10/07/024
 # -*- coding: utf-8 -*-
 
@@ -71,7 +71,6 @@ STATE_FILE = "state.json"
 # Global variables
 time_format_24hr = True  # True for 24-hour format, False for 12-hour format
 available_versions = []  # To store fetched versions
-update_menu = ["CURRENT: " + "V2.1.0", "UPDATE", "DOWNGRADE", "EXIT"]
 
 # Function to load state from file
 def load_state():
@@ -252,6 +251,22 @@ update_flag = True
 debounce_time = 0.05  # Debounce time for button presses
 last_update_time = time.time()  # Initialize the last update time
 
+# Function to get current version from the script
+def get_current_version():
+    script_path = sys.argv[0]  # Get the current script path
+    try:
+        with open(script_path, 'r') as file:
+            for line in file:
+                if line.startswith("# V"):
+                    return line.strip().split(' ')[1]
+    except Exception as e:
+        logging.error(f"Error reading script for version: {e}")
+    return "Unknown"
+
+# Update the update_menu dynamically
+current_version = get_current_version()
+update_menu = [f"CURRENT: {current_version}", "UPDATE", "DOWNGRADE", "EXIT"]
+
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
 application_menu = ["COMPANION", "SATELLITE", "", "EXIT"]
@@ -387,7 +402,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "TEST V3.1.3", font=font12, fill=255)
+        local_draw.text((0, 48), "OMNICONPRO.COM/ help", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -769,13 +784,6 @@ def update_clock_format(time_format_24hr):
     # You might need to adapt this command to restart your specific panel if `lxpanelctl` is not applicable
     subprocess.run(['lxpanelctl', 'restart'], check=True)
     logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
-
-def get_current_version():
-    with open("/home/omnicon/OLED_Stats/omnicon.py", "r") as file:
-        for line in file:
-            if line.startswith("# V"):
-                return line.strip().split(' ')[1]
-    return "Unknown"
 
 def download_file_from_github(tag, local_path):
     url = f"https://raw.githubusercontent.com/RUDEWORLD/OMNICON/{tag}/omnicon.py"
