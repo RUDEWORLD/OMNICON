@@ -1,8 +1,7 @@
 # CREATED BY PHILLIP RUDE
-# FOR OMNICON DUO PI AND MONO PI
-# V3.3.3
-# JULY 29, 2024
-
+# FOR OMNICON DUO PI, MONO PI & HUB
+# V3.3.5
+# OCT 07, 2024
 
 import time
 import board
@@ -287,10 +286,10 @@ menu_options = {
 
 # Button indicators
 indicators = {
-    "K1": "▲",
-    "K2": "▼",
-    "K3": "◀",
-    "K4": "▶"
+    "K1": "â²",
+    "K2": "â¼",
+    "K3": "â€",
+    "K4": "â¶"
 }
 
 # Function to get current network settings
@@ -399,8 +398,8 @@ def update_oled_display():
             ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_static_sm":
         sm_display = [f"{sm:03}" for sm in subnet_mask]
@@ -410,8 +409,8 @@ def update_oled_display():
             sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_static_gw":
         gw_display = [f"{gw:03}" for gw in gateway]
@@ -421,8 +420,8 @@ def update_oled_display():
             gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "show_network_info":
         ip, subnet, gateway, dns = get_current_network_settings()
@@ -452,8 +451,8 @@ def update_oled_display():
             date_display = datetime_temp.strftime("%m/%d/%y")
         local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
         local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_time":
         time_format_display = "24hr" if time_format_24hr else "12hr"
@@ -476,8 +475,8 @@ def update_oled_display():
 
         local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
         local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_datetime":
         current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
@@ -610,7 +609,7 @@ def button_k2_pressed():
 
 @debounce
 def button_k3_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, time_format_24hr
     logging.debug("K3 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
@@ -619,8 +618,13 @@ def button_k3_pressed():
         menu_state = "show_pi_health"
     elif menu_state == "show_pi_health":
         reset_to_main()
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
-        ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
+        ip_octet = (ip_octet - 1) % 4
+    elif menu_state == "set_date":
+        ip_octet = (ip_octet - 1) % 3  # Cycle between 0 and 2 for date
+    elif menu_state == "set_time":
+        max_octet = 3 if not time_format_24hr else 2
+        ip_octet = (ip_octet - 1) % (max_octet + 1)
     else:
         menu_selection = 2
         activate_menu_item()
@@ -629,7 +633,7 @@ def button_k3_pressed():
 
 @debounce
 def button_k4_pressed():
-    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, time_format_24hr
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
@@ -638,13 +642,19 @@ def button_k4_pressed():
         menu_state = "show_network_info"
     elif menu_state == "show_network_info":
         reset_to_main()
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
-        ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
+        ip_octet = (ip_octet + 1) % 4
+    elif menu_state == "set_date":
+        ip_octet = (ip_octet + 1) % 3  # Cycle between 0 and 2 for date
+    elif menu_state == "set_time":
+        max_octet = 3 if not time_format_24hr else 2
+        ip_octet = (ip_octet + 1) % (max_octet + 1)
     else:
         menu_selection = 3
         activate_menu_item()
     reset_menu_selection()
     update_oled_display()
+
 
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time
@@ -703,33 +713,56 @@ def apply_static_settings():
 
 def update_date(increment):
     global datetime_temp
-    if ip_octet == 0:
-        new_month = (datetime_temp.month + increment - 1) % 12 + 1
-        datetime_temp = datetime_temp.replace(month=new_month)
-    elif ip_octet == 1:
-        new_day = (datetime_temp.day + increment - 1) % 31 + 1
-        datetime_temp = datetime_temp.replace(day=new_day)
-    elif ip_octet == 2:
-        datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
+    logging.debug(f"Updating date by {increment} at ip_octet {ip_octet}")
+    try:
+        if ip_octet == 0:
+            new_month = (datetime_temp.month + increment - 1) % 12 + 1
+            datetime_temp = datetime_temp.replace(month=new_month)
+            logging.debug(f"New month: {new_month}")
+        elif ip_octet == 1:
+            new_day = (datetime_temp.day + increment - 1) % 31 + 1
+            datetime_temp = datetime_temp.replace(day=new_day)
+            logging.debug(f"New day: {new_day}")
+        elif ip_octet == 2:
+            new_year = datetime_temp.year + increment
+            datetime_temp = datetime_temp.replace(year=new_year)
+            logging.debug(f"New year: {new_year}")
+    except ValueError as e:
+        logging.error(f"Invalid date adjustment: {e}")
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
-    if ip_octet == 0:
-        time_format_24hr = not time_format_24hr
-    elif ip_octet == 1:
-        new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
-        if new_hour == 0 and not time_format_24hr:
-            new_hour = 12
-        datetime_temp = datetime_temp.replace(hour=new_hour)
-    elif ip_octet == 2:
-        new_minute = (datetime_temp.minute + increment) % 60
-        datetime_temp = datetime_temp.replace(minute(new_minute))
-    elif ip_octet == 3 and not time_format_24hr:
-        am_pm = datetime_temp.strftime("%p")
-        if am_pm == "AM":
-            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
-        else:
-            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+    logging.debug(f"Updating time by {increment} at ip_octet {ip_octet}")
+    try:
+        if ip_octet == 0:
+            # Toggle between 24-hour and 12-hour format
+            time_format_24hr = not time_format_24hr
+            logging.debug(f"Time format changed to {'24hr' if time_format_24hr else '12hr'}")
+        elif ip_octet == 1:
+            if time_format_24hr:
+                new_hour = (datetime_temp.hour + increment) % 24
+            else:
+                hour = datetime_temp.hour % 12 or 12  # Convert to 12-hour format
+                new_hour = (hour + increment - 1) % 12 + 1
+                if datetime_temp.strftime("%p") == "PM":
+                    new_hour = new_hour % 12 + 12
+            datetime_temp = datetime_temp.replace(hour=new_hour)
+            logging.debug(f"New hour: {datetime_temp.hour}")
+        elif ip_octet == 2:
+            new_minute = (datetime_temp.minute + increment) % 60
+            datetime_temp = datetime_temp.replace(minute=new_minute)
+            logging.debug(f"New minute: {new_minute}")
+        elif ip_octet == 3 and not time_format_24hr:
+            # Toggle AM/PM
+            if datetime_temp.hour >= 12:
+                new_hour = datetime_temp.hour - 12
+            else:
+                new_hour = datetime_temp.hour + 12
+            datetime_temp = datetime_temp.replace(hour=new_hour)
+            logging.debug(f"AM/PM toggled, new hour: {datetime_temp.hour}")
+    except ValueError as e:
+        logging.error(f"Invalid time adjustment: {e}")
+
 
 def set_system_datetime(datetime_temp):
     date_str = datetime_temp.strftime("%Y-%m-%d")
@@ -832,8 +865,8 @@ def update_omnicon():
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
     current_version = get_current_version()
     if selected_version == current_version:
-        show_message("OMNICON IS UP TO DATE", 10)
-        return "OMNICON IS UP TO DATE"
+        show_message("YOU'RE UP TO DATE", 3, return_to="update")  # Show message for 3 seconds and return to update menu
+        return "YOU'RE UP TO DATE"
     if download_file_from_github(selected_version, local_path):
         restart_script()
         return "OMNICON UPDATED"
@@ -1060,8 +1093,7 @@ def activate_menu_item():
                 current_version = get_current_version()
                 upgrade_versions = filter_versions(current_version, available_versions, upgrade=True)
                 if not upgrade_versions:
-                    show_message("YOU'RE UP TO DATE", 3)
-                    menu_state = "default"
+                    show_message("YOU'RE UP TO DATE", 3, return_to="update")
                     return
                 menu_options["upgrade_select"] = upgrade_versions[:3] + ["EXIT"]
                 menu_state = "upgrade_select"
@@ -1104,16 +1136,16 @@ def activate_menu_item():
     update_oled_display()
 
 
-
-
-def show_message(message, duration):
-    global timeout_flag
+def show_message(message, duration, return_to="default"):
+    global timeout_flag, menu_state
     clear_display()
     draw.text((0, 0), message, font=font12, fill=255)
     oled.image(image.rotate(180))
     oled.show()
     time.sleep(duration)
     timeout_flag = True
+    menu_state = return_to
+    update_oled_display()
 
 if __name__ == "__main__":
     try:
