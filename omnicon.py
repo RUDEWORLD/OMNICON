@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.2.1
+# V3.2.2
 # 10/07/024
 # -*- coding: utf-8 -*-
 
@@ -402,7 +402,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "OMNICONPRO.COM/ help", font=font10, fill=255)
+        local_draw.text((0, 48), "TEST 3.2.2", font=font14, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
