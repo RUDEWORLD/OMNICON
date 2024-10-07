@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI & HUB
-# V3.3.12
+# V3.3.5
 # OCT 07, 2024
 
 import time
