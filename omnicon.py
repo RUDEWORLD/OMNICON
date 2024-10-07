@@ -1,8 +1,8 @@
-# -*- coding: utf-8 -*-
 # CREATED BY PHILLIP RUDE
-# FOR OMNICON DUO PI, MONO PI & HUB
-# V3.3.12
-# OCT 07, 2024
+# FOR OMNICON DUO PI, MONO PI, & HUB
+# V3.1.0
+# 10/07/024
+# -*- coding: utf-8 -*-
 
 import time
 import board
@@ -71,7 +71,7 @@ STATE_FILE = "state.json"
 # Global variables
 time_format_24hr = True  # True for 24-hour format, False for 12-hour format
 available_versions = []  # To store fetched versions
-update_menu = ["CURRENT: " + "V2.1.0", "UPGRADE", "DOWNGRADE", "EXIT"]
+update_menu = ["CURRENT: " + "V2.1.0", "UPDATE", "DOWNGRADE", "EXIT"]
 
 # Function to load state from file
 def load_state():
@@ -194,7 +194,7 @@ HEIGHT = 64
 BORDER = 5
 
 # Display Refresh
-LOOPTIME = 0.05  # Refresh rate reduced to 0.5 seconds
+LOOPTIME = 0.5  # Refresh rate reduced to 0.5 seconds
 
 # Use for I2C.
 i2c = board.I2C()
@@ -281,8 +281,6 @@ menu_options = {
     "set_time": [],
     "upgrade_select": [],
     "downgrade_select": [],
-    "show_network_info": [],
-    "show_pi_health": [],
 }
 
 # Button indicators
@@ -389,7 +387,7 @@ def update_oled_display():
         local_draw.text((95, 16), port, font=font11, fill=255)
         local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "OMNICONPRO.COM / help", font=font10, fill=255)
+        local_draw.text((0, 48), "OMNICONPRO.COM/ help", font=font10, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -492,7 +490,7 @@ def update_oled_display():
     elif menu_state == "update":
         for i, option in enumerate(update_menu):
             if option:
-                suffix = indicators.get(f"K{i+1}", "") if i > 0 else ""  # Remove indicator from the current version line
+                suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
                 local_draw.text((0, i * 16), option, font=font11, fill=255)
                 local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
@@ -525,7 +523,6 @@ def update_oled_display():
     blink_state = not blink_state
     update_flag = True
     logging.debug("OLED display updated")
-
 
 def reset_to_main():
     global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp
@@ -576,7 +573,6 @@ def button_k1_pressed():
     else:
         menu_selection = 0
         activate_menu_item()
-    reset_menu_selection()
     update_oled_display()
 
 @debounce
@@ -605,57 +601,41 @@ def button_k2_pressed():
     else:
         menu_selection = 1
         activate_menu_item()
-    reset_menu_selection()
     update_oled_display()
 
 @debounce
 def button_k3_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, time_format_24hr
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
     logging.debug("K3 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
     
-    if menu_state == "default":
-        menu_state = "show_pi_health"
-    elif menu_state == "show_pi_health":
+    if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
-        ip_octet = (ip_octet - 1) % 4
-    elif menu_state == "set_date":
-        ip_octet = (ip_octet - 1) % 3  # Cycle between 0 and 2 for date
-    elif menu_state == "set_time":
-        max_octet = 3 if not time_format_24hr else 2
-        ip_octet = (ip_octet - 1) % (max_octet + 1)
+    elif menu_state == "default":
+        menu_state = "show_pi_health"
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
     else:
         menu_selection = 2
         activate_menu_item()
-    reset_menu_selection()
     update_oled_display()
 
 @debounce
 def button_k4_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, time_format_24hr
+    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
     timeout_flag = False
     
-    if menu_state == "default":
-        menu_state = "show_network_info"
-    elif menu_state == "show_network_info":
+    if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
-        ip_octet = (ip_octet + 1) % 4
-    elif menu_state == "set_date":
-        ip_octet = (ip_octet + 1) % 3  # Cycle between 0 and 2 for date
-    elif menu_state == "set_time":
-        max_octet = 3 if not time_format_24hr else 2
-        ip_octet = (ip_octet + 1) % (max_octet + 1)
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
     else:
         menu_selection = 3
         activate_menu_item()
-    reset_menu_selection()
     update_oled_display()
-
 
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time
@@ -714,56 +694,33 @@ def apply_static_settings():
 
 def update_date(increment):
     global datetime_temp
-    logging.debug(f"Updating date by {increment} at ip_octet {ip_octet}")
-    try:
-        if ip_octet == 0:
-            new_month = (datetime_temp.month + increment - 1) % 12 + 1
-            datetime_temp = datetime_temp.replace(month=new_month)
-            logging.debug(f"New month: {new_month}")
-        elif ip_octet == 1:
-            new_day = (datetime_temp.day + increment - 1) % 31 + 1
-            datetime_temp = datetime_temp.replace(day=new_day)
-            logging.debug(f"New day: {new_day}")
-        elif ip_octet == 2:
-            new_year = datetime_temp.year + increment
-            datetime_temp = datetime_temp.replace(year=new_year)
-            logging.debug(f"New year: {new_year}")
-    except ValueError as e:
-        logging.error(f"Invalid date adjustment: {e}")
+    if ip_octet == 0:
+        new_month = (datetime_temp.month + increment - 1) % 12 + 1
+        datetime_temp = datetime_temp.replace(month(new_month))
+    elif ip_octet == 1:
+        new_day = (datetime_temp.day + increment - 1) % 31 + 1
+        datetime_temp = datetime_temp.replace(day(new_day))
+    elif ip_octet == 2:
+        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
-    logging.debug(f"Updating time by {increment} at ip_octet {ip_octet}")
-    try:
-        if ip_octet == 0:
-            # Toggle between 24-hour and 12-hour format
-            time_format_24hr = not time_format_24hr
-            logging.debug(f"Time format changed to {'24hr' if time_format_24hr else '12hr'}")
-        elif ip_octet == 1:
-            if time_format_24hr:
-                new_hour = (datetime_temp.hour + increment) % 24
-            else:
-                hour = datetime_temp.hour % 12 or 12  # Convert to 12-hour format
-                new_hour = (hour + increment - 1) % 12 + 1
-                if datetime_temp.strftime("%p") == "PM":
-                    new_hour = new_hour % 12 + 12
-            datetime_temp = datetime_temp.replace(hour=new_hour)
-            logging.debug(f"New hour: {datetime_temp.hour}")
-        elif ip_octet == 2:
-            new_minute = (datetime_temp.minute + increment) % 60
-            datetime_temp = datetime_temp.replace(minute=new_minute)
-            logging.debug(f"New minute: {new_minute}")
-        elif ip_octet == 3 and not time_format_24hr:
-            # Toggle AM/PM
-            if datetime_temp.hour >= 12:
-                new_hour = datetime_temp.hour - 12
-            else:
-                new_hour = datetime_temp.hour + 12
-            datetime_temp = datetime_temp.replace(hour=new_hour)
-            logging.debug(f"AM/PM toggled, new hour: {datetime_temp.hour}")
-    except ValueError as e:
-        logging.error(f"Invalid time adjustment: {e}")
-
+    if ip_octet == 0:
+        time_format_24hr = not time_format_24hr
+    elif ip_octet == 1:
+        new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
+        if new_hour == 0 and not time_format_24hr:
+            new_hour = 12
+        datetime_temp = datetime_temp.replace(hour(new_hour))
+    elif ip_octet == 2:
+        new_minute = (datetime_temp.minute + increment) % 60
+        datetime_temp = datetime_temp.replace(minute(new_minute))
+    elif ip_octet == 3 and not time_format_24hr:
+        am_pm = datetime_temp.strftime("%p")
+        if am_pm == "AM":
+            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
+        else:
+            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
 
 def set_system_datetime(datetime_temp):
     date_str = datetime_temp.strftime("%Y-%m-%d")
@@ -815,8 +772,8 @@ def update_clock_format(time_format_24hr):
 
 def get_current_version():
     with open("/home/omnicon/OLED_Stats/omnicon.py", "r") as file:
-        for i, line in enumerate(file):
-            if i == 2 and line.startswith("# V"):
+        for line in file:
+            if line.startswith("# V"):
                 return line.strip().split(' ')[1]
     return "Unknown"
 
@@ -844,18 +801,6 @@ def fetch_github_tags():
         logging.error(f"Failed to fetch tags from GitHub: {e}")
         return []
 
-def filter_versions(current_version, versions, upgrade=True):
-    current_version_tuple = tuple(map(int, current_version.lstrip('V').split('.')))
-    filtered_versions = []
-    for v in versions:
-        try:
-            version_tuple = tuple(map(int, v.lstrip('vV').split('.')))
-            if (upgrade and version_tuple > current_version_tuple) or (not upgrade and version_tuple < current_version_tuple):
-                filtered_versions.append(v)
-        except ValueError:
-            logging.warning(f"Skipping invalid version format: {v}")
-    return filtered_versions
-
 def update_omnicon():
     global available_versions
     if not available_versions:
@@ -864,10 +809,6 @@ def update_omnicon():
             return "NO TAGS FOUND"
     selected_version = available_versions[menu_selection]
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
-    current_version = get_current_version()
-    if selected_version == current_version:
-        show_message("YOU'RE UP TO DATE", 3, return_to="update")  # Show message for 3 seconds and return to update menu
-        return "YOU'RE UP TO DATE"
     if download_file_from_github(selected_version, local_path):
         restart_script()
         return "OMNICON UPDATED"
@@ -898,16 +839,12 @@ def update_oled():
         update_oled_display()
 
 def main():
-    global datetime_temp, time_format_24hr, update_menu
+    global datetime_temp, time_format_24hr
     initial_setup()
     datetime_temp = datetime.now()
 
     state = load_state()
     time_format_24hr = state.get("time_format_24hr", True)
-
-    # Get current version for the update menu
-    current_version = get_current_version()
-    update_menu[0] = f"CURRENT: {current_version}"
 
     button_k1.when_pressed = button_k1_pressed
     button_k2.when_pressed = button_k2_pressed
@@ -957,19 +894,8 @@ def check_timeout():
             reset_to_main()
         time.sleep(1)
 
-# Add this function to reset menu selection if it goes out of range
-def reset_menu_selection():
-    global menu_selection
-    options = menu_options[menu_state]
-    if menu_selection >= len(options):
-        menu_selection = 0
-
-# Modify the `activate_menu_item` function
 def activate_menu_item():
     global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp, available_versions
-
-    reset_menu_selection()  # Ensure menu_selection is valid
-
     options = menu_options[menu_state]
     selected_option = options[menu_selection]
 
@@ -1008,9 +934,8 @@ def activate_menu_item():
         elif selected_option == "UPDATE":
             available_versions = fetch_github_tags()
             if available_versions:
-                current_version = get_current_version()
-                menu_options["upgrade_select"] = filter_versions(current_version, available_versions, upgrade=True)[:3] + ["EXIT"]
-                menu_options["downgrade_select"] = filter_versions(current_version, available_versions, upgrade=False)[:3] + ["EXIT"]
+                menu_options["upgrade_select"] = available_versions[:3] + ["EXIT"]
+                menu_options["downgrade_select"] = available_versions[:3] + ["EXIT"]
             menu_state = "update"
             menu_selection = 0
         elif selected_option == "EXIT":
@@ -1088,30 +1013,15 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "update":
-        if selected_option == "UPGRADE":
-            available_versions = fetch_github_tags()
-            if available_versions:
-                current_version = get_current_version()
-                upgrade_versions = filter_versions(current_version, available_versions, upgrade=True)
-                if not upgrade_versions:
-                    show_message("YOU'RE UP TO DATE", 3, return_to="update")
-                    return
-                menu_options["upgrade_select"] = upgrade_versions[:3] + ["EXIT"]
-                menu_state = "upgrade_select"
-                menu_selection = 0
-            else:
-                show_message("NO TAGS FOUND", 3)
-                menu_state = "default"
-                return
+        if selected_option == "UPDATE":
+            menu_state = "upgrade_select"
+            menu_selection = 0
         elif selected_option == "DOWNGRADE":
-            available_versions = fetch_github_tags()
-            if available_versions:
-                current_version = get_current_version()
-                menu_options["downgrade_select"] = filter_versions(current_version, available_versions, upgrade=False)[:3] + ["EXIT"]
             menu_state = "downgrade_select"
             menu_selection = 0
         elif selected_option == "EXIT":
             menu_state = "default"
+            menu_selection = 0
 
     elif menu_state == "upgrade_select":
         if selected_option == "EXIT":
@@ -1119,7 +1029,7 @@ def activate_menu_item():
             menu_selection = 0
         else:
             update_result = update_omnicon()
-            show_message(update_result, 10)  # Show message for 10 seconds
+            show_message(update_result, 5)
             menu_state = "default"
             menu_selection = 0
 
@@ -1136,17 +1046,14 @@ def activate_menu_item():
     logging.debug(f"Activated menu item: {selected_option}")
     update_oled_display()
 
-
-def show_message(message, duration, return_to="default"):
-    global timeout_flag, menu_state
+def show_message(message, duration):
+    global timeout_flag
     clear_display()
     draw.text((0, 0), message, font=font12, fill=255)
     oled.image(image.rotate(180))
     oled.show()
     time.sleep(duration)
     timeout_flag = True
-    menu_state = return_to
-    update_oled_display()
 
 if __name__ == "__main__":
     try:
