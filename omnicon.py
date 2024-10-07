@@ -1,8 +1,9 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.2.4
+# V3.2.1
 # 10/07/024
 # -*- coding: utf-8 -*-
+# NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
 import time
 import board
@@ -71,6 +72,22 @@ STATE_FILE = "state.json"
 # Global variables
 time_format_24hr = True  # True for 24-hour format, False for 12-hour format
 available_versions = []  # To store fetched versions
+
+# Function to get current version from the script
+def get_current_version():
+    script_path = sys.argv[0]  # Get the current script path
+    try:
+        with open(script_path, 'r') as file:
+            for line in file:
+                if line.startswith("# V"):
+                    return line.strip().split(' ')[1]
+    except Exception as e:
+        logging.error(f"Error reading script for version: {e}")
+    return "Unknown"
+
+# Update the update_menu dynamically
+current_version = get_current_version()
+update_menu = [f"CURRENT: {current_version}", "UPDATE", "DOWNGRADE", "EXIT"]
 
 # Function to load state from file
 def load_state():
@@ -212,22 +229,12 @@ draw = ImageDraw.Draw(image)
 # Draw a white background
 draw.rectangle((0, 0, oled.width, oled.height), outline=255, fill=255)
 
-# Load the same font with size 10 for the last line
+# Load fonts
 font10 = ImageFont.truetype('DejaVuSans.ttf', 10)
-
-# Use DejaVuSans font for proper triangle display
 font11 = ImageFont.truetype('DejaVuSans.ttf', 11)
-
-# Use DejaVuSans font for proper triangle display
 font12 = ImageFont.truetype('DejaVuSans.ttf', 12)
-
-# Use DejaVuSans font for proper triangle display
 font13 = ImageFont.truetype('DejaVuSans.ttf', 13)
-
-# Use DejaVuSans font for proper triangle display
 font14 = ImageFont.truetype('DejaVuSans.ttf', 14)
-
-# Load the same font with size 15 for the first line
 font15 = ImageFont.truetype('DejaVuSans.ttf', 15)
 
 # Global variables for menu navigation
@@ -251,21 +258,8 @@ update_flag = True
 debounce_time = 0.05  # Debounce time for button presses
 last_update_time = time.time()  # Initialize the last update time
 
-# Function to get current version from the script
-def get_current_version():
-    script_path = sys.argv[0]  # Get the current script path
-    try:
-        with open(script_path, 'r') as file:
-            for line in file:
-                if line.startswith("# V"):
-                    return line.strip().split(' ')[1]
-    except Exception as e:
-        logging.error(f"Error reading script for version: {e}")
-    return "Unknown"
-
-# Update the update_menu dynamically
-current_version = get_current_version()
-update_menu = [f"CURRENT: {current_version}", "UPDATE", "DOWNGRADE", "EXIT"]
+# Global flag to indicate message display
+message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
@@ -343,8 +337,10 @@ def clear_display():
 
 # Function to update OLED display
 def update_oled_display():
-    global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr
+    global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr, message_displayed
     current_time = time.time()
+    if message_displayed:
+        return
     if not update_flag or (current_time - last_update_time) < LOOPTIME:
         return
     update_flag = False
@@ -360,7 +356,7 @@ def update_oled_display():
 
     if menu_state == "default":
         current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
-        current_time = datetime.now().strftime(current_time_format)
+        current_time_str = datetime.now().strftime(current_time_format)
         # Shell scripts for system monitoring
         cmd = "hostname -I | cut -d\' \' -f1"
         IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
@@ -400,9 +396,9 @@ def update_oled_display():
         local_draw.text((90, 0), EthProfile, font=font11, fill=255)
         local_draw.text((0, 16), IP, font=font11, fill=255)
         local_draw.text((95, 16), port, font=font11, fill=255)
-        local_draw.text((0, 32), f"{current_time}", font=font12, fill=255)
+        local_draw.text((0, 32), f"{current_time_str}", font=font12, fill=255)
         local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "TEST 3.2.4", font=font14, fill=255)
+        local_draw.text((0, 48), "omniconpro.com / help", font=font11, fill=255)
 
     elif menu_state == "set_static_ip":
         ip_display = [f"{ip:03}" for ip in ip_address]
@@ -683,7 +679,7 @@ def hold_k4():
         state = load_state()
         state["time_format_24hr"] = time_format_24hr
         save_state(state)
-        update_clock_format(time_format_24hr)  # Add this line to update the clock format
+        update_clock_format(time_format_24hr)
         restart_script()
     update_oled_display()  # Update the display immediately after change
 
@@ -709,33 +705,39 @@ def apply_static_settings():
 
 def update_date(increment):
     global datetime_temp
-    if ip_octet == 0:
-        new_month = (datetime_temp.month + increment - 1) % 12 + 1
-        datetime_temp = datetime_temp.replace(month(new_month))
-    elif ip_octet == 1:
-        new_day = (datetime_temp.day + increment - 1) % 31 + 1
-        datetime_temp = datetime_temp.replace(day(new_day))
-    elif ip_octet == 2:
-        datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
+    try:
+        if ip_octet == 0:
+            new_month = (datetime_temp.month + increment - 1) % 12 + 1
+            datetime_temp = datetime_temp.replace(month=new_month)
+        elif ip_octet == 1:
+            new_day = (datetime_temp.day + increment - 1) % 31 + 1
+            datetime_temp = datetime_temp.replace(day=new_day)
+        elif ip_octet == 2:
+            datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
+    except ValueError as e:
+        logging.error(f"Error updating date: {e}")
 
 def update_time(increment):
     global datetime_temp, time_format_24hr
-    if ip_octet == 0:
-        time_format_24hr = not time_format_24hr
-    elif ip_octet == 1:
-        new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
-        if new_hour == 0 and not time_format_24hr:
-            new_hour = 12
-        datetime_temp = datetime_temp.replace(hour(new_hour))
-    elif ip_octet == 2:
-        new_minute = (datetime_temp.minute + increment) % 60
-        datetime_temp = datetime_temp.replace(minute(new_minute))
-    elif ip_octet == 3 and not time_format_24hr:
-        am_pm = datetime_temp.strftime("%p")
-        if am_pm == "AM":
-            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
-        else:
-            datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+    try:
+        if ip_octet == 0:
+            time_format_24hr = not time_format_24hr
+        elif ip_octet == 1:
+            new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
+            if new_hour == 0 and not time_format_24hr:
+                new_hour = 12
+            datetime_temp = datetime_temp.replace(hour=new_hour)
+        elif ip_octet == 2:
+            new_minute = (datetime_temp.minute + increment) % 60
+            datetime_temp = datetime_temp.replace(minute=new_minute)
+        elif ip_octet == 3 and not time_format_24hr:
+            am_pm = datetime_temp.strftime("%p")
+            if am_pm == "AM":
+                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
+            else:
+                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+    except ValueError as e:
+        logging.error(f"Error updating time: {e}")
 
 def set_system_datetime(datetime_temp):
     date_str = datetime_temp.strftime("%Y-%m-%d")
@@ -751,11 +753,7 @@ def restart_script():
 def subnet_mask_to_cidr(mask):
     mask_octets = map(int, mask.split('.'))
     binary_str = ''.join([bin(octet).lstrip('0b').zfill(8) for octet in mask_octets])
-    return str(len(binary_str.rstrip('0')))
-
-def clear_display():
-    logging.debug("Clearing display")
-    draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
+    return str(binary_str.count('1'))
 
 def turn_off_oled():
     oled.fill(0)
@@ -781,7 +779,6 @@ def update_clock_format(time_format_24hr):
                 file.write(line)
 
     # Restart the panel or system to apply changes
-    # You might need to adapt this command to restart your specific panel if `lxpanelctl` is not applicable
     subprocess.run(['lxpanelctl', 'restart'], check=True)
     logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
 
@@ -810,12 +807,19 @@ def fetch_github_tags():
         return []
 
 def update_omnicon():
-    global available_versions
+    global available_versions, current_version
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
             return "NO TAGS FOUND"
-    selected_version = available_versions[menu_selection]
+    current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
+    newer_versions = [
+        v for v in available_versions
+        if tuple(map(int, v.strip('V').split('.'))) > current_version_tuple
+    ]
+    if not newer_versions:
+        return "YOU'RE UP TO DATE"
+    selected_version = newer_versions[0]
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
     if download_file_from_github(selected_version, local_path):
         restart_script()
@@ -824,12 +828,19 @@ def update_omnicon():
         return "UPDATE FAILED"
 
 def downgrade_omnicon():
-    global available_versions
+    global available_versions, current_version
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
             return "NO TAGS FOUND"
-    selected_version = available_versions[menu_selection]
+    current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
+    older_versions = [
+        v for v in available_versions
+        if tuple(map(int, v.strip('V').split('.'))) < current_version_tuple
+    ]
+    if not older_versions:
+        return "NO OLDER VERSIONS"
+    selected_version = older_versions[0]
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
     if download_file_from_github(selected_version, local_path):
         restart_script()
@@ -940,10 +951,6 @@ def activate_menu_item():
             menu_selection = 0
             datetime_temp = datetime.now()
         elif selected_option == "UPDATE":
-            available_versions = fetch_github_tags()
-            if available_versions:
-                menu_options["upgrade_select"] = available_versions[:3] + ["EXIT"]
-                menu_options["downgrade_select"] = available_versions[:3] + ["EXIT"]
             menu_state = "update"
             menu_selection = 0
         elif selected_option == "EXIT":
@@ -1022,32 +1029,24 @@ def activate_menu_item():
 
     elif menu_state == "update":
         if selected_option == "UPDATE":
-            menu_state = "upgrade_select"
+            result = update_omnicon()
+            if result == "YOU'RE UP TO DATE":
+                duration = 3  # Display for 3 seconds
+            else:
+                duration = 5  # Display for 5 seconds for other messages
+            show_message(result, duration)
+            menu_state = "default"
             menu_selection = 0
         elif selected_option == "DOWNGRADE":
-            menu_state = "downgrade_select"
+            result = downgrade_omnicon()
+            if result == "NO OLDER VERSIONS":
+                duration = 3  # Display for 3 seconds
+            else:
+                duration = 5  # Display for 5 seconds for other messages
+            show_message(result, duration)
+            menu_state = "default"
             menu_selection = 0
         elif selected_option == "EXIT":
-            menu_state = "default"
-            menu_selection = 0
-
-    elif menu_state == "upgrade_select":
-        if selected_option == "EXIT":
-            menu_state = "update"
-            menu_selection = 0
-        else:
-            update_result = update_omnicon()
-            show_message(update_result, 5)
-            menu_state = "default"
-            menu_selection = 0
-
-    elif menu_state == "downgrade_select":
-        if selected_option == "EXIT":
-            menu_state = "update"
-            menu_selection = 0
-        else:
-            downgrade_result = downgrade_omnicon()
-            show_message(downgrade_result, 5)
             menu_state = "default"
             menu_selection = 0
 
@@ -1055,12 +1054,16 @@ def activate_menu_item():
     update_oled_display()
 
 def show_message(message, duration):
-    global timeout_flag
+    global timeout_flag, message_displayed
+    message_displayed = True
     clear_display()
-    draw.text((0, 0), message, font=font12, fill=255)
-    oled.image(image.rotate(180))
+    local_image = Image.new("1", (oled.width, oled.height))
+    local_draw = ImageDraw.Draw(local_image)
+    local_draw.text((0, 0), message, font=font12, fill=255)
+    oled.image(local_image.rotate(180))
     oled.show()
     time.sleep(duration)
+    message_displayed = False
     timeout_flag = True
 
 if __name__ == "__main__":
