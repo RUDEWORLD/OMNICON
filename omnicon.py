@@ -88,7 +88,7 @@ def get_current_version():
 
 # Update the update_menu dynamically
 current_version = get_current_version()
-update_menu = ["UPDATE", "DOWNGRADE", "", "EXIT"]
+update_menu = [f"CURRENT: {current_version}", "UPDATE", "DOWNGRADE", "EXIT"]
 
 # Function to load state from file
 def load_state():
@@ -506,7 +506,9 @@ def update_oled_display():
             if option:
                 suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
                 local_draw.text((0, i * 16), option, font=font11, fill=255)
-                local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+                if i > 0:  # Skip the indicator for the first line
+                    local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
 
     elif menu_state == "update_confirm":
         if selected_version is None:
