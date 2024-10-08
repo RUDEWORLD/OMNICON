@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.0.2
-# 10/08/024
+# V3.1.0
+# 10/08/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -264,7 +264,8 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-application_menu = ["COMPANION", "SATELLITE", "", "EXIT"]
+application_menu = ["COMPANION", "SATELLITE", "BITFOCUS UPDATES", "EXIT"]
+app_updates_menu = ["   UPDATE APPS", "UPDATE COMPANION", "UPDATE SATELLITE", "EXIT"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
@@ -276,6 +277,7 @@ menu_options = {
     "default": main_menu,
     "main": main_menu,
     "application": application_menu,
+    "app_updates": ["BITFOCUS UPDATES", "UPDATE COMPANION", "UPDATE SATELLITE", "EXIT"],  # App updates menu items
     "configuration": configuration_menu,
     "network": network_menu,
     "power": power_menu,
@@ -287,8 +289,8 @@ menu_options = {
     "set_static_gw": set_static_menu,
     "set_datetime": set_datetime_menu,
     "update": update_menu,
-    "update_confirm": [],  # Added for update confirmation
-    "downgrade_confirm": [],  # Added for downgrade confirmation
+    "update_confirm": [],
+    "downgrade_confirm": [],
     "set_date": [],
     "set_time": [],
     "upgrade_select": [],
@@ -411,8 +413,8 @@ def update_oled_display():
             ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_static_sm":
         sm_display = [f"{sm:03}" for sm in subnet_mask]
@@ -422,8 +424,8 @@ def update_oled_display():
             sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_static_gw":
         gw_display = [f"{gw:03}" for gw in gateway]
@@ -433,8 +435,8 @@ def update_oled_display():
             gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "show_network_info":
         ip, subnet, gateway, dns = get_current_network_settings()
@@ -464,8 +466,8 @@ def update_oled_display():
             date_display = datetime_temp.strftime("%m/%d/%y")
         local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
         local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_time":
         time_format_display = "24hr" if time_format_24hr else "12hr"
@@ -488,8 +490,8 @@ def update_oled_display():
 
         local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
         local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "set_datetime":
         current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
@@ -515,16 +517,16 @@ def update_oled_display():
             selected_version = "Unknown"
         local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
         local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state == "downgrade_confirm":
         if selected_version is None:
             selected_version = "Unknown"
         local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
         local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
 
     elif menu_state in ["upgrade_select", "downgrade_select"]:
         for i, version in enumerate(available_versions[:3]):
@@ -533,6 +535,22 @@ def update_oled_display():
             local_draw.text((112, i * 16), suffix, font=font11, fill=255)
         local_draw.text((0, 48), "EXIT", font=font11, fill=255)
         local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+
+    elif menu_state == "app_updates":
+        options = menu_options[menu_state]
+        # Line 1: Centered title without indicator
+        title = options[0].strip()
+        if title:
+            title_bbox = local_draw.textbbox((0, 0), title, font=font12)
+            title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
+            local_draw.text((title_x, 0), title, font=font12, fill=255)
+        # Display other options with indicators
+        for i in range(1, len(options)):
+            option = options[i]
+            if option:
+                suffix = indicators.get(f"K{i+1}", "")  # K2, K3, K4
+                local_draw.text((0, i * 16), option, font=font11, fill=255)
+                local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
     else:
         options = menu_options.get(menu_state, [])
@@ -652,6 +670,10 @@ def button_k3_pressed():
         reset_to_main()
     elif menu_state == "default":
         menu_state = "show_pi_health"
+    elif menu_state == "application":
+        # Move to the app updates menu when K3 is pressed in application menu
+        menu_state = "app_updates"
+        menu_selection = 0
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
     elif menu_state in ["update_confirm", "downgrade_confirm"]:
@@ -661,6 +683,7 @@ def button_k3_pressed():
         menu_selection = 2
         activate_menu_item()
     update_oled_display()
+
 
 @debounce
 def button_k4_pressed():
@@ -763,7 +786,7 @@ def update_date(increment):
             new_day = (datetime_temp.day + increment - 1) % 31 + 1
             datetime_temp = datetime_temp.replace(day=new_day)
         elif ip_octet == 2:
-            datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
+            datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
     except ValueError as e:
         logging.error(f"Error updating date: {e}")
 
@@ -1081,6 +1104,31 @@ def activate_menu_item():
             ip_octet = 0
         elif selected_option == "EXIT":
             menu_state = "default"
+            menu_selection = 0
+
+    elif menu_state == "application":
+        if selected_option == "COMPANION":
+            toggle_service("companion")
+            menu_state = "default"
+        elif selected_option == "SATELLITE":
+            toggle_service("satellite")
+            menu_state = "default"
+        elif selected_option == "APP UPDATES":
+            menu_state = "app_updates"
+            menu_selection = 0
+        elif selected_option == "EXIT":
+            menu_state = "default"
+            menu_selection = 0
+
+    elif menu_state == "app_updates":
+        if menu_selection == 1 and selected_option == "UPDATE COMPANION":
+            execute_command('echo -e "\\033[A\\n" | sudo companion-update')
+            show_message("Updating Companion", 2)
+        elif menu_selection == 2 and selected_option == "UPDATE SATELLITE":
+            execute_command('echo -e "\\033[A\\n" | sudo satellite-update')
+            show_message("Updating Satellite", 2)
+        elif menu_selection == 3 and selected_option == "EXIT":
+            menu_state = "application"
             menu_selection = 0
 
     elif menu_state == "update":
