@@ -413,8 +413,8 @@ def update_oled_display():
             ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_sm":
         sm_display = [f"{sm:03}" for sm in subnet_mask]
@@ -424,8 +424,8 @@ def update_oled_display():
             sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_static_gw":
         gw_display = [f"{gw:03}" for gw in gateway]
@@ -435,8 +435,8 @@ def update_oled_display():
             gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
         local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
         local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "show_network_info":
         ip, subnet, gateway, dns = get_current_network_settings()
@@ -466,8 +466,8 @@ def update_oled_display():
             date_display = datetime_temp.strftime("%m/%d/%y")
         local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
         local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_time":
         time_format_display = "24hr" if time_format_24hr else "12hr"
@@ -490,8 +490,8 @@ def update_oled_display():
 
         local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
         local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "set_datetime":
         current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
@@ -517,16 +517,16 @@ def update_oled_display():
             selected_version = "Unknown"
         local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
         local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state == "downgrade_confirm":
         if selected_version is None:
             selected_version = "Unknown"
         local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
         local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  â€", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  â¶", font=font11, fill=255)
+        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
     elif menu_state in ["upgrade_select", "downgrade_select"]:
         for i, version in enumerate(available_versions[:3]):
