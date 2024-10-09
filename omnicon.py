@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.1.2
+# V3.1.3
 # 10/08/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -264,8 +264,8 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-application_menu = ["COMPANION", "SATELLITE", "BITFOCUS UPDATES", "EXIT"]
-app_updates_menu = ["   UPDATE APPS", "UPDATE COMPANION", "UPDATE SATELLITE", "EXIT"]
+application_menu = ["RUN COMPANION", "RUN SATELLITE", "APP UPDATER", "EXIT"]
+app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
@@ -277,7 +277,7 @@ menu_options = {
     "default": main_menu,
     "main": main_menu,
     "application": application_menu,
-    "app_updates": ["BITFOCUS UPDATES", "UPDATE COMPANION", "UPDATE SATELLITE", "EXIT"],  # App updates menu items
+    "app_updates": app_updates_menu,
     "configuration": configuration_menu,
     "network": network_menu,
     "power": power_menu,
@@ -1012,10 +1012,10 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "application":
-        if selected_option == "COMPANION":
+        if selected_option == "RUN COMPANION":
             toggle_service("companion")
             menu_state = "default"
-        elif selected_option == "SATELLITE":
+        elif selected_option == "RUN SATELLITE":
             toggle_service("satellite")
             menu_state = "default"
         elif selected_option == "EXIT":
@@ -1113,7 +1113,7 @@ def activate_menu_item():
         elif selected_option == "SATELLITE":
             toggle_service("satellite")
             menu_state = "default"
-        elif selected_option == "APP UPDATES":
+        elif selected_option == "APP UPDATER":
             menu_state = "app_updates"
             menu_selection = 0
         elif selected_option == "EXIT":
@@ -1121,10 +1121,10 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "app_updates":
-        if menu_selection == 1 and selected_option == "UPDATE COMPANION":
+        if menu_selection == 1 and selected_option == "COMPANION":
             execute_command('echo -e "\\033[A\\n" | sudo companion-update')
             show_message("Updating Companion", 2)
-        elif menu_selection == 2 and selected_option == "UPDATE SATELLITE":
+        elif menu_selection == 2 and selected_option == "SATELLITE":
             execute_command('echo -e "\\033[A\\n" | sudo satellite-update')
             show_message("Updating Satellite", 2)
         elif menu_selection == 3 and selected_option == "EXIT":
