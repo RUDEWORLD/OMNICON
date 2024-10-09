@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.1.3
+# V3.1.4
 # 10/08/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -85,6 +85,23 @@ def get_current_version():
     except Exception as e:
         logging.error(f"Error reading script for version: {e}")
     return "Unknown"
+
+# Function to get companion and satellite versions
+def get_versions():
+    command = 'echo "Companion version:" && grep \'"version"\' /opt/companion/package.json && echo "Satellite version:" && grep \'"version"\' /opt/companion-satellite/satellite/package.json'
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+
+    # Clean and truncate the Companion version
+    companion_version = lines[1].split(":")[1].strip().split('+')[0].replace('"', '').strip()
+    companion_version = ".".join(companion_version.split('.')[:3]).rstrip(",")
+    
+    # Clean and truncate the Satellite version
+    satellite_version = lines[3].split(":")[1].strip().split('+')[0].replace('"', '').strip()
+    satellite_version = ".".join(satellite_version.split('.')[:3]).rstrip(",")
+    
+    return companion_version, satellite_version
+
 
 # Update the update_menu dynamically
 current_version = get_current_version()
@@ -264,7 +281,8 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-application_menu = ["RUN COMPANION", "RUN SATELLITE", "APP UPDATER", "EXIT"]
+companion_version, satellite_version = get_versions()
+application_menu = [f"COMPANION v{companion_version}", f"SATELLITE v{satellite_version}", "APP UPDATER", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
@@ -538,6 +556,7 @@ def update_oled_display():
 
     elif menu_state == "app_updates":
         options = menu_options[menu_state]
+        companion_version, satellite_version = get_versions()
         # Line 1: Centered title without indicator
         title = options[0].strip()
         if title:
@@ -545,12 +564,12 @@ def update_oled_display():
             title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
             local_draw.text((title_x, 0), title, font=font12, fill=255)
         # Display other options with indicators
-        for i in range(1, len(options)):
-            option = options[i]
-            if option:
-                suffix = indicators.get(f"K{i+1}", "")  # K2, K3, K4
-                local_draw.text((0, i * 16), option, font=font11, fill=255)
-                local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+        local_draw.text((0, 16), "COMPANION", font=font11, fill=255)
+        local_draw.text((0, 32), "SATELLITE", font=font11, fill=255)
+        local_draw.text((0, 48), "EXIT", font=font11, fill=255)
+        local_draw.text((112, 16), indicators["K2"], font=font11, fill=255)  # Down button
+        local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)  # Left button
+        local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)  # Right button
 
     else:
         options = menu_options.get(menu_state, [])
@@ -808,7 +827,7 @@ def update_time(increment):
             if am_pm == "AM":
                 datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
             else:
-                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+                datetime_temp = datetime_temp.replace(hour((datetime_temp.hour - 12) % 24))
     except ValueError as e:
         logging.error(f"Error updating time: {e}")
 
@@ -1012,10 +1031,10 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "application":
-        if selected_option == "RUN COMPANION":
+        if selected_option == "COMPANION":
             toggle_service("companion")
             menu_state = "default"
-        elif selected_option == "RUN SATELLITE":
+        elif selected_option == "SATELLITE":
             toggle_service("satellite")
             menu_state = "default"
         elif selected_option == "EXIT":
