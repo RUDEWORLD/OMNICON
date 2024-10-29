@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.1.4
-# 10/08/2024
+# V3.1.8
+# 10/28/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -22,6 +22,7 @@ import os
 import sys
 import psutil  # Added for accurate CPU usage
 import requests
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -66,6 +67,37 @@ command_stop_companion = "sudo systemctl stop companion.service"
 command_start_satellite = "sudo systemctl start satellite.service"
 command_stop_satellite = "sudo systemctl stop satellite.service"
 
+# RETRIEVE COMPANION & SATELLITE VERSION
+def get_companion_version():
+    try:
+        with open('/opt/companion/package.json', 'r') as f:
+            data = json.load(f)
+            version = data.get('version', 'Unknown')
+            # Extract only the first three numbers
+            match = re.match(r'^(\d+\.\d+\.\d+)', version)
+            if match:
+                return match.group(1)
+            else:
+                return 'Unknown'
+    except Exception as e:
+        logging.error(f"Error reading companion version: {e}")
+        return 'Unknown'
+
+def get_satellite_version():
+    try:
+        with open('/opt/companion-satellite/satellite/package.json', 'r') as f:
+            data = json.load(f)
+            version = data.get('version', 'Unknown')
+            # Extract only the first three numbers
+            match = re.match(r'^(\d+\.\d+\.\d+)', version)
+            if match:
+                return match.group(1)
+            else:
+                return 'Unknown'
+    except Exception as e:
+        logging.error(f"Error reading satellite version: {e}")
+        return 'Unknown'
+
 # State file
 STATE_FILE = "state.json"
 
@@ -73,6 +105,8 @@ STATE_FILE = "state.json"
 time_format_24hr = True  # True for 24-hour format, False for 12-hour format
 available_versions = []  # To store fetched versions
 selected_version = None  # Initialize selected_version at the global level
+updating_application = False
+oled_lock = threading.Lock()
 
 # Function to get current version from the script
 def get_current_version():
@@ -85,23 +119,6 @@ def get_current_version():
     except Exception as e:
         logging.error(f"Error reading script for version: {e}")
     return "Unknown"
-
-# Function to get companion and satellite versions
-def get_versions():
-    command = 'echo "Companion version:" && grep \'"version"\' /opt/companion/package.json && echo "Satellite version:" && grep \'"version"\' /opt/companion-satellite/satellite/package.json'
-    result = subprocess.run(command, shell=True, capture_output=True, text=True)
-    lines = result.stdout.splitlines()
-
-    # Clean and truncate the Companion version
-    companion_version = lines[1].split(":")[1].strip().split('+')[0].replace('"', '').strip()
-    companion_version = ".".join(companion_version.split('.')[:3]).rstrip(",")
-    
-    # Clean and truncate the Satellite version
-    satellite_version = lines[3].split(":")[1].strip().split('+')[0].replace('"', '').strip()
-    satellite_version = ".".join(satellite_version.split('.')[:3]).rstrip(",")
-    
-    return companion_version, satellite_version
-
 
 # Update the update_menu dynamically
 current_version = get_current_version()
@@ -154,6 +171,11 @@ def get_active_connection():
         if active == "yes":
             return name
     return None
+
+# DEFINE COMP & SAT VERSION FOR MENU
+companion_version = get_companion_version()
+satellite_version = get_satellite_version()
+application_menu = [f"Companion {companion_version}", f"Satellite {satellite_version}", "APP UPDATER", "EXIT"]
 
 # Function to switch network profile
 def switch_network_profile(new_profile):
@@ -281,9 +303,10 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-companion_version, satellite_version = get_versions()
-application_menu = [f"COMPANION v{companion_version}", f"SATELLITE v{satellite_version}", "APP UPDATER", "EXIT"]
+application_menu = ["RUN COMPANION", "RUN SATELLITE", "APP UPDATER", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
+app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
+app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
@@ -296,6 +319,8 @@ menu_options = {
     "main": main_menu,
     "application": application_menu,
     "app_updates": app_updates_menu,
+    "app_update_companion": app_update_companion_menu,
+    "app_update_satellite": app_update_satellite_menu,
     "configuration": configuration_menu,
     "network": network_menu,
     "power": power_menu,
@@ -313,6 +338,9 @@ menu_options = {
     "set_time": [],
     "upgrade_select": [],
     "downgrade_select": [],
+    "update_companion": ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"],
+    "update_satellite": ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"],
+
 }
 
 # Button indicators
@@ -335,6 +363,53 @@ def get_current_network_settings():
     dns_servers = [line.split(':')[-1].strip() for line in dns.splitlines() if 'IP4.DNS' in line]
     dns = dns_servers[0] if dns_servers else "N/A"
     return ip, subnet, gateway, dns
+
+# FUNCTION TO UPDATE COMMAND WITH PROGRESS
+def execute_command_with_progress(command):
+    try:
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in iter(process.stdout.readline, ''):
+            if line == '':
+                break
+            logging.debug(f"Command output: {line.strip()}")
+            # Parse the line for progress percentage
+            progress = parse_progress(line)
+            if progress is not None:
+                # Update OLED display with progress
+                update_oled_with_progress(progress)
+        process.stdout.close()
+        process.wait()
+    except Exception as e:
+        logging.error(f"Error executing command with progress: {e}")
+
+# PARSE PROGRESS
+def parse_progress(output_line):
+    # Use regex to search for percentage
+    match = re.search(r'(\d+)%', output_line)
+    if match:
+        progress = int(match.group(1))
+        return progress
+    else:
+        return None
+
+# UPDATE OLED FUNCTION
+def update_oled_with_progress(progress):
+    with oled_lock:
+        # Create a new image to display
+        local_image = Image.new("1", (oled.width, oled.height))
+        local_draw = ImageDraw.Draw(local_image)
+
+        # Display progress percentage
+        local_draw.text((30, 0), f"UPDATING", font=font12, fill=255)
+        local_draw.text((10, 16), f"DO NOT TURN OFF", font=font12, fill=255)
+        local_draw.text((0, 32), f"Progress: {progress}%", font=font12, fill=255)
+
+        # Draw a progress bar
+        bar_width = int((progress / 100) * (oled.width - 20))
+        local_draw.rectangle((10, 50, 10 + bar_width, 58), outline=255, fill=255)
+
+        oled.image(local_image.rotate(180))
+        oled.show()
 
 def cidr_to_subnet_mask(cidr):
     cidr = int(cidr)
@@ -361,8 +436,9 @@ def clear_display():
 # Function to update OLED display
 def update_oled_display():
     global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr, message_displayed, selected_version
+    global companion_version, satellite_version  # Declare as global to modify them
     current_time = time.time()
-    if message_displayed:
+    if message_displayed or updating_application:
         return
     if not update_flag or (current_time - last_update_time) < LOOPTIME:
         return
@@ -370,228 +446,303 @@ def update_oled_display():
     last_update_time = current_time
     logging.debug("Updating OLED display")
 
-    local_image = Image.new("1", (oled.width, oled.height))
-    local_draw = ImageDraw.Draw(local_image)
+    with oled_lock:
+        local_image = Image.new("1", (oled.width, oled.height))
+        local_draw = ImageDraw.Draw(local_image)
 
-    state = load_state()
+        state = load_state()
 
-    clear_display()
+        clear_display()
 
-    if menu_state == "default":
-        current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
-        current_time_str = datetime.now().strftime(current_time_format)
-        # Shell scripts for system monitoring
-        cmd = "hostname -I | cut -d\' \' -f1"
-        IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-        cmd = "top -bn1 | grep load | awk '{printf \"CPU: %.2f\", $(NF-2)}'"
-        CPU = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-        cmd = "free -m | awk 'NR==2{printf \"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
-        MemUsage = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-        cmd = "df -h | awk '$NF==\"/\"{printf \"Disk: %d/%dGB %s\", $3,$2,$5}'"
-        Disk = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-        cmd = "vcgencmd measure_temp |cut -f 2 -d '='"
-        Temp = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+        if menu_state == "default":
+            current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
+            current_time_str = datetime.now().strftime(current_time_format)
+            # Shell scripts for system monitoring
+            cmd = "hostname -I | cut -d\' \' -f1"
+            IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            cmd = "top -bn1 | grep load | awk '{printf \"CPU: %.2f\", $(NF-2)}'"
+            CPU = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            cmd = "free -m | awk 'NR==2{printf \"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
+            MemUsage = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            cmd = "df -h | awk '$NF==\"/\"{printf \"Disk: %d/%dGB %s\", $3,$2,$5}'"
+            Disk = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            cmd = "vcgencmd measure_temp |cut -f 2 -d '='"
+            Temp = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
 
-        # Get the active ethernet connection profile name
-        cmd = "nmcli -t -f NAME,DEVICE connection show --active | grep eth | cut -d':' -f1"
-        EthProfile = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            # Get the active ethernet connection profile name
+            cmd = "nmcli -t -f NAME,DEVICE connection show --active | grep eth | cut -d':' -f1"
+            EthProfile = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
 
-        # Check the status of the services
-        companion_active = subprocess.run(["systemctl", "is-active", "--quiet", "companion.service"]).returncode == 0
-        satellite_active = subprocess.run(["systemctl", "is-active", "--quiet", "satellite.service"]).returncode == 0
+            # Check the status of the services
+            companion_active = subprocess.run(["systemctl", "is-active", "--quiet", "companion.service"]).returncode == 0
+            satellite_active = subprocess.run(["systemctl", "is-active", "--quiet", "satellite.service"]).returncode == 0
 
-        if companion_active:
-            title = "COMPANION"
-            port = ":8000"
-        elif satellite_active:
-            title = "SATELLITE"
-            port = ":9999"
-        else:
-            title = "SYSTEM OFF"
-            port = ""
+            if companion_active:
+                title = "COMPANION"
+                port = ":8000"
+            elif satellite_active:
+                title = "SATELLITE"
+                port = ":9999"
+            else:
+                title = "SYSTEM OFF"
+                port = ""
 
-        # Center the title text
-        title_bbox = local_draw.textbbox((0, 0), title, font=font14)
-        title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
+            # Center the title text
+            title_bbox = local_draw.textbbox((0, 0), title, font=font14)
+            title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
 
-        # Pi Stats Display
-        local_draw.text((0, 0), f"{title}", font=font12, fill=255)
-        local_draw.text((90, 0), EthProfile, font=font11, fill=255)
-        local_draw.text((0, 16), IP, font=font11, fill=255)
-        local_draw.text((95, 16), port, font=font11, fill=255)
-        local_draw.text((0, 32), f"{current_time_str}", font=font12, fill=255)
-        local_draw.text((90, 32), Temp, font=font11, fill=255)
-        local_draw.text((0, 48), "omniconpro.com / help", font=font11, fill=255)
+            # Pi Stats Display
+            local_draw.text((0, 0), f"{title}", font=font12, fill=255)
+            local_draw.text((90, 0), EthProfile, font=font11, fill=255)
+            local_draw.text((0, 16), IP, font=font11, fill=255)
+            local_draw.text((95, 16), port, font=font11, fill=255)
+            local_draw.text((0, 32), f"{current_time_str}", font=font12, fill=255)
+            local_draw.text((90, 32), Temp, font=font11, fill=255)
+            local_draw.text((0, 48), "omniconpro.com / help", font=font11, fill=255)
 
-    elif menu_state == "set_static_ip":
-        ip_display = [f"{ip:03}" for ip in ip_address]
-        if blink_state:
-            ip_display[ip_octet] = f"[{ip_display[ip_octet]}]"  # Highlight the selected octet with brackets
-        else:
-            ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
-        local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
-        local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        elif menu_state == "application":
+            # Refresh versions
+            companion_version = get_companion_version()
+            satellite_version = get_satellite_version()
+            # Update the menu with the new versions
+            application_menu[0] = f"Companion {companion_version}"
+            application_menu[1] = f"Satellite {satellite_version}"
 
-    elif menu_state == "set_static_sm":
-        sm_display = [f"{sm:03}" for sm in subnet_mask]
-        if blink_state:
-            sm_display[ip_octet] = f"[{sm_display[ip_octet]}]"  # Highlight the selected octet with brackets
-        else:
-            sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
-        local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
-        local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    prefix = ""
+                    # Check if the service is active
+                    if option.startswith("Companion") and is_service_active("companion.service"):
+                        prefix = "*"
+                    elif option.startswith("Satellite") and is_service_active("satellite.service"):
+                        prefix = "*"
+                    suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                    local_draw.text((0, i * 16), f"{prefix}{option}", font=font11, fill=255)
+                    local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
-    elif menu_state == "set_static_gw":
-        gw_display = [f"{gw:03}" for gw in gateway]
-        if blink_state:
-            gw_display[ip_octet] = f"[{gw_display[ip_octet]}]"  # Highlight the selected octet with brackets
-        else:
-            gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
-        local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
-        local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+        elif menu_state == "set_static_ip":
+            ip_display = [f"{ip:03}" for ip in ip_address]
+            if blink_state:
+                ip_display[ip_octet] = f"[{ip_display[ip_octet]}]"  # Highlight the selected octet with brackets
+            else:
+                ip_display[ip_octet] = f" {ip_display[ip_octet]} "  # Remove brackets during blink off
+            local_draw.text((0, 0), "   SET IP ADDRESS", font=font12, fill=255)
+            local_draw.text((0, 16), ' '.join(ip_display), font=font12, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
-    elif menu_state == "show_network_info":
-        ip, subnet, gateway, dns = get_current_network_settings()
-        local_draw.text((0, 0), f"IP: {ip}", font=font11, fill=255)
-        local_draw.text((0, 16), f"SUB: {subnet}", font=font11, fill=255)
-        local_draw.text((0, 32), f"GW: {gateway}", font=font11, fill=255)
-        local_draw.text((0, 48), f"DNS: {dns}", font=font11, fill=255)
+        elif menu_state == "set_static_sm":
+            sm_display = [f"{sm:03}" for sm in subnet_mask]
+            if blink_state:
+                sm_display[ip_octet] = f"[{sm_display[ip_octet]}]"  # Highlight the selected octet with brackets
+            else:
+                sm_display[ip_octet] = f" {sm_display[ip_octet]} "  # Remove brackets during blink off
+            local_draw.text((0, 0), "  SET SUBNET MASK", font=font12, fill=255)
+            local_draw.text((0, 16), ' '.join(sm_display), font=font12, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
-    elif menu_state == "show_pi_health":
-        temp, voltage, watt_input, cpu, memory = get_pi_health()
-        current_datetime = datetime.now().strftime("%m/%d/%y  %H:%M" if time_format_24hr else "%m/%d/%y  %I:%M %p")
-        local_draw.text((0, 0), f" {current_datetime}", font=font12, fill=255)
-        local_draw.text((12, 16), f"RAM: {memory}", font=font11, fill=255)
-        local_draw.text((11, 32), f"V: {voltage}   W: {watt_input:.2f}", font=font11, fill=255)
-        local_draw.text((39, 48), f"CPU: {cpu:.2f}%", font=font11, fill=255)
+        elif menu_state == "set_static_gw":
+            gw_display = [f"{gw:03}" for gw in gateway]
+            if blink_state:
+                gw_display[ip_octet] = f"[{gw_display[ip_octet]}]"  # Highlight the selected octet with brackets
+            else:
+                gw_display[ip_octet] = f" {gw_display[ip_octet]} "  # Remove brackets during blink off
+            local_draw.text((0, 0), "     SET GATEWAY", font=font12, fill=255)
+            local_draw.text((0, 16), ' '.join(gw_display), font=font12, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
-    elif menu_state == "set_date":
-        date_display = datetime_temp.strftime("%m/%d/%y")
-        if blink_state:
-            if ip_octet == 0:
-                date_display = f"[{date_display[:2]}]{date_display[2:]}"
-            elif ip_octet == 1:
-                date_display = f"{date_display[:3]}[{date_display[3:5]}]{date_display[5:]}"
-            elif ip_octet == 2:
-                date_display = f"{date_display[:6]}[{date_display[6:]}]"
-        else:
+        elif menu_state == "show_network_info":
+            ip, subnet, gateway_addr, dns = get_current_network_settings()
+            local_draw.text((0, 0), f"IP: {ip}", font=font11, fill=255)
+            local_draw.text((0, 16), f"SUB: {subnet}", font=font11, fill=255)
+            local_draw.text((0, 32), f"GW: {gateway_addr}", font=font11, fill=255)
+            local_draw.text((0, 48), f"DNS: {dns}", font=font11, fill=255)
+
+        elif menu_state == "show_pi_health":
+            temp, voltage, watt_input, cpu, memory = get_pi_health()
+            current_datetime = datetime.now().strftime("%m/%d/%y  %H:%M" if time_format_24hr else "%m/%d/%y  %I:%M %p")
+            local_draw.text((0, 0), f" {current_datetime}", font=font12, fill=255)
+            local_draw.text((12, 16), f"RAM: {memory}", font=font11, fill=255)
+            local_draw.text((11, 32), f"V: {voltage}   W: {watt_input:.2f}", font=font11, fill=255)
+            local_draw.text((39, 48), f"CPU: {cpu:.2f}%", font=font11, fill=255)
+
+        elif menu_state == "set_date":
             date_display = datetime_temp.strftime("%m/%d/%y")
-        local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
-        local_draw.text((35, 16), date_display, font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+            if blink_state:
+                if ip_octet == 0:
+                    date_display = f"[{date_display[:2]}]{date_display[2:]}"
+                elif ip_octet == 1:
+                    date_display = f"{date_display[:3]}[{date_display[3:5]}]{date_display[5:]}"
+                elif ip_octet == 2:
+                    date_display = f"{date_display[:6]}[{date_display[6:]}]"
+            else:
+                date_display = datetime_temp.strftime("%m/%d/%y")
+            local_draw.text((0, 0), "          SET DATE", font=font12, fill=255)
+            local_draw.text((35, 16), date_display, font=font12, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
-    elif menu_state == "set_time":
-        time_format_display = "24hr" if time_format_24hr else "12hr"
-        time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
-        am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
-
-        if blink_state:
-            if ip_octet == 0:
-                time_format_display = f"[{time_format_display}]"
-            elif ip_octet == 1:
-                time_display = f"[{time_display[:2]}]{time_display[2:]}"
-            elif ip_octet == 2:
-                time_display = f"{time_display[:3]}[{time_display[3:]}]"
-            elif ip_octet == 3 and not time_format_24hr:
-                am_pm_display = f"[{am_pm_display}]"
-        else:
+        elif menu_state == "set_time":
             time_format_display = "24hr" if time_format_24hr else "12hr"
             time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
             am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
 
-        local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
-        local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+            if blink_state:
+                if ip_octet == 0:
+                    time_format_display = f"[{time_format_display}]"
+                elif ip_octet == 1:
+                    time_display = f"[{time_display[:2]}]{time_display[2:]}"
+                elif ip_octet == 2:
+                    time_display = f"{time_display[:3]}[{time_display[3:]}]"
+                elif ip_octet == 3 and not time_format_24hr:
+                    am_pm_display = f"[{am_pm_display}]"
+            else:
+                time_format_display = "24hr" if time_format_24hr else "12hr"
+                time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
+                am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
 
-    elif menu_state == "set_datetime":
-        current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
-        local_draw.text((0, 0), f"{current_datetime}", font=font12, fill=255)
-        local_draw.text((0, 16), "SET DATE", font=font12, fill=255)
-        local_draw.text((0, 32), "SET TIME", font=font12, fill=255)
-        local_draw.text((0, 48), "EXIT", font=font12, fill=255)
-        local_draw.text((112, 16), indicators["K2"], font=font11, fill=255)  # Down button for SET DATE
-        local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)  # Left button for SET TIME
-        local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)  # Right button for EXIT
+            local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
+            local_draw.text((0, 16), f"{time_format_display} - {time_display} {am_pm_display}", font=font12, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
-    elif menu_state == "update":
-        for i, option in enumerate(update_menu):
-            if option:
+        elif menu_state == "set_datetime":
+            current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
+            local_draw.text((0, 0), f"{current_datetime}", font=font12, fill=255)
+            local_draw.text((0, 16), "SET DATE", font=font12, fill=255)
+            local_draw.text((0, 32), "SET TIME", font=font12, fill=255)
+            local_draw.text((0, 48), "EXIT", font=font12, fill=255)
+            local_draw.text((112, 16), indicators["K2"], font=font11, fill=255)  # Down button for SET DATE
+            local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)  # Left button for SET TIME
+            local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)  # Right button for EXIT
+
+        elif menu_state == "update":
+            for i, option in enumerate(update_menu):
+                if option:
+                    suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                    local_draw.text((0, i * 16), option, font=font11, fill=255)
+                    if i > 0:  # Skip the indicator for the first line
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        elif menu_state == "update_confirm":
+            if selected_version is None:
+                selected_version = "Unknown"
+            local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
+            local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+
+        elif menu_state == "downgrade_confirm":
+            if selected_version is None:
+                selected_version = "Unknown"
+            local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
+            local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
+            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+
+        elif menu_state in ["upgrade_select", "downgrade_select"]:
+            for i, version in enumerate(available_versions[:3]):
                 suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
-                local_draw.text((0, i * 16), option, font=font11, fill=255)
-                if i > 0:  # Skip the indicator for the first line
+                local_draw.text((0, i * 16), version, font=font11, fill=255)
+                local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+            local_draw.text((0, 48), "EXIT", font=font11, fill=255)
+            local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+
+        elif menu_state == "app_updates":
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    if i == 0:
+                        # Center the first line and remove the indicator
+                        text_width, text_height = local_draw.textsize(option, font=font11)
+                        x_position = (oled.width - text_width) // 2
+                        local_draw.text((x_position, i * 16), option, font=font11, fill=255)
+                    else:
+                        suffix = indicators.get(f"K{i+1}", "")
+                        local_draw.text((0, i * 16), option, font=font11, fill=255)
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        elif menu_state == "update_companion":
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    if i == 0:
+                        # Center the text "UPDATE COMPANION" without indicator
+                        text_width, text_height = local_draw.textsize(option, font=font11)
+                        x_position = (oled.width - text_width) // 2
+                        local_draw.text((x_position, i * 16), option, font=font11, fill=255)
+                    else:
+                        # Show indicators on lines 2, 3, & 4
+                        suffix = indicators.get(f"K{i+1}", "")
+                        local_draw.text((0, i * 16), option, font=font11, fill=255)
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        elif menu_state == "update_satellite":
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    if i == 0:
+                        # Center the text "UPDATE SATELLITE" without indicator
+                        text_width, text_height = local_draw.textsize(option, font=font11)
+                        x_position = (oled.width - text_width) // 2
+                        local_draw.text((x_position, i * 16), option, font=font11, fill=255)
+                    else:
+                        # Show indicators on lines 2, 3, & 4
+                        suffix = indicators.get(f"K{i+1}", "")
+                        local_draw.text((0, i * 16), option, font=font11, fill=255)
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        elif menu_state == "app_update_companion":
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    if i == 0:
+                        # Center the text "UPDATE COMPANION" and remove button indicator
+                        text_width = local_draw.textsize(option, font=font11)[0]
+                        x = (oled.width - text_width) // 2
+                        local_draw.text((x, i * 16), option, font=font11, fill=255)
+                        # No button indicator
+                    else:
+                        suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                        local_draw.text((0, i * 16), option, font=font11, fill=255)
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        elif menu_state == "app_update_satellite":
+            options = menu_options[menu_state]
+            for i, option in enumerate(options):
+                if option:
+                    if i == 0:
+                        # Center the text "UPDATE SATELLITE" and remove button indicator
+                        text_width = local_draw.textsize(option, font=font11)[0]
+                        x = (oled.width - text_width) // 2
+                        local_draw.text((x, i * 16), option, font=font11, fill=255)
+                        # No button indicator
+                    else:
+                        suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                        local_draw.text((0, i * 16), option, font=font11, fill=255)
+                        local_draw.text((112, i * 16), suffix, font=font11, fill=255)
+
+        else:
+            options = menu_options.get(menu_state, [])
+            state = load_state()
+            for i, option in enumerate(options):
+                if option:
+                    prefix = ""
+                    if menu_state == "network":
+                        if (option == "DHCP" and state["network"] == DHCP_PROFILE) or (option == "STATIC IP" and state["network"] == STATIC_PROFILE):
+                            prefix = "*"
+                    suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
+                    local_draw.text((0, i * 16), f"{prefix}{option}", font=font11, fill=255)
                     local_draw.text((112, i * 16), suffix, font=font11, fill=255)
 
-
-    elif menu_state == "update_confirm":
-        if selected_version is None:
-            selected_version = "Unknown"
-        local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
-        local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
-
-    elif menu_state == "downgrade_confirm":
-        if selected_version is None:
-            selected_version = "Unknown"
-        local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
-        local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-        local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-        local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
-
-    elif menu_state in ["upgrade_select", "downgrade_select"]:
-        for i, version in enumerate(available_versions[:3]):
-            suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
-            local_draw.text((0, i * 16), version, font=font11, fill=255)
-            local_draw.text((112, i * 16), suffix, font=font11, fill=255)
-        local_draw.text((0, 48), "EXIT", font=font11, fill=255)
-        local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
-
-    elif menu_state == "app_updates":
-        options = menu_options[menu_state]
-        companion_version, satellite_version = get_versions()
-        # Line 1: Centered title without indicator
-        title = options[0].strip()
-        if title:
-            title_bbox = local_draw.textbbox((0, 0), title, font=font12)
-            title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
-            local_draw.text((title_x, 0), title, font=font12, fill=255)
-        # Display other options with indicators
-        local_draw.text((0, 16), "COMPANION", font=font11, fill=255)
-        local_draw.text((0, 32), "SATELLITE", font=font11, fill=255)
-        local_draw.text((0, 48), "EXIT", font=font11, fill=255)
-        local_draw.text((112, 16), indicators["K2"], font=font11, fill=255)  # Down button
-        local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)  # Left button
-        local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)  # Right button
-
-    else:
-        options = menu_options.get(menu_state, [])
-        state = load_state()
-        for i, option in enumerate(options):
-            if option:
-                prefix = ""
-                if menu_state == "network":
-                    if (option == "DHCP" and state["network"] == DHCP_PROFILE) or (option == "STATIC IP" and state["network"] == STATIC_PROFILE):
-                        prefix = "*"
-                if menu_state == "application":
-                    if (option == "COMPANION" and is_service_active("companion.service")) or (option == "SATELLITE" and is_service_active("satellite.service")):
-                        prefix = "*"
-                suffix = indicators.get(f"K{i+1}", "")  # Use .get to avoid KeyError
-                local_draw.text((0, i * 16), f"{prefix}{option}", font=font11, fill=255)
-                local_draw.text((112, i * 16), suffix, font=font11, fill=255)
-
-    oled.image(local_image.rotate(180))
-    oled.show()
-    blink_state = not blink_state
-    update_flag = True
-    logging.debug("OLED display updated")
+        oled.image(local_image.rotate(180))
+        oled.show()
+        blink_state = not blink_state
+        update_flag = True
+        logging.debug("OLED display updated")
 
 def reset_to_main():
     global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp
@@ -703,7 +854,6 @@ def button_k3_pressed():
         activate_menu_item()
     update_oled_display()
 
-
 @debounce
 def button_k4_pressed():
     global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
@@ -743,7 +893,7 @@ def hold_k3():
     update_oled_display()  # Update the display immediately after change
 
 def hold_k4():
-    global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
+    global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 held for 1 seconds")
     last_interaction_time = time.time()
 
@@ -805,7 +955,7 @@ def update_date(increment):
             new_day = (datetime_temp.day + increment - 1) % 31 + 1
             datetime_temp = datetime_temp.replace(day=new_day)
         elif ip_octet == 2:
-            datetime_temp = datetime_temp.replace(year(datetime_temp.year + increment))
+            datetime_temp = datetime_temp.replace(year=datetime_temp.year + increment)
     except ValueError as e:
         logging.error(f"Error updating date: {e}")
 
@@ -827,7 +977,7 @@ def update_time(increment):
             if am_pm == "AM":
                 datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
             else:
-                datetime_temp = datetime_temp.replace(hour((datetime_temp.hour - 12) % 24))
+                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
     except ValueError as e:
         logging.error(f"Error updating time: {e}")
 
@@ -848,9 +998,10 @@ def subnet_mask_to_cidr(mask):
     return str(binary_str.count('1'))
 
 def turn_off_oled():
-    oled.fill(0)
-    oled.show()
-    oled.poweroff()
+    with oled_lock:
+        oled.fill(0)
+        oled.show()
+        oled.poweroff()
 
 def update_clock_format(time_format_24hr):
     config_file_path = os.path.expanduser("~/.config/wf-panel-pi.ini")
@@ -1012,7 +1163,7 @@ def check_timeout():
         time.sleep(1)
 
 def activate_menu_item():
-    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp, available_versions, selected_version
+    global menu_state, menu_selection, updating_application, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp, available_versions, selected_version
     options = menu_options.get(menu_state, [])
     selected_option = options[menu_selection]
 
@@ -1031,14 +1182,18 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "application":
-        if selected_option == "COMPANION":
+        if selected_option.startswith("Companion"):
             toggle_service("companion")
             menu_state = "default"
-        elif selected_option == "SATELLITE":
+        elif selected_option.startswith("Satellite"):
             toggle_service("satellite")
             menu_state = "default"
+        elif selected_option == "APP UPDATER":
+            menu_state = "app_updates"
+            menu_selection = 0
         elif selected_option == "EXIT":
             menu_state = "default"
+            menu_selection = 0
 
     elif menu_state == "configuration":
         if selected_option == "NETWORK":
@@ -1125,30 +1280,51 @@ def activate_menu_item():
             menu_state = "default"
             menu_selection = 0
 
-    elif menu_state == "application":
+    elif menu_state == "app_updates":
         if selected_option == "COMPANION":
-            toggle_service("companion")
-            menu_state = "default"
+            menu_state = "update_companion"
+            menu_selection = 0
         elif selected_option == "SATELLITE":
-            toggle_service("satellite")
-            menu_state = "default"
-        elif selected_option == "APP UPDATER":
-            menu_state = "app_updates"
+            menu_state = "update_satellite"
             menu_selection = 0
         elif selected_option == "EXIT":
-            menu_state = "default"
-            menu_selection = 0
-
-    elif menu_state == "app_updates":
-        if menu_selection == 1 and selected_option == "COMPANION":
-            execute_command('echo -e "\\033[A\\n" | sudo companion-update')
-            show_message("Updating Companion", 2)
-        elif menu_selection == 2 and selected_option == "SATELLITE":
-            execute_command('echo -e "\\033[A\\n" | sudo satellite-update')
-            show_message("Updating Satellite", 2)
-        elif menu_selection == 3 and selected_option == "EXIT":
             menu_state = "application"
             menu_selection = 0
+
+    elif menu_state == "update_companion":
+        if selected_option == "CURRENT STABLE":
+            show_message("UPDATING COMPANION", 2)
+            updating_application = True
+            execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+            updating_application = False
+            menu_state = "default"
+        elif selected_option == "CURRENT BETA":
+            show_message("UPDATING COMPANION", 2)
+            updating_application = True
+            execute_command_with_progress('echo -e "\\n" | sudo companion-update')
+            updating_application = False
+            menu_state = "default"
+        elif selected_option == "CANCEL":
+            menu_state = "app_updates"
+            menu_selection = 0
+
+    elif menu_state == "update_satellite":
+        if selected_option == "CURRENT STABLE":
+            show_message("UPDATING SATELLITE", 2)
+            updating_application = True
+            execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+            updating_application = False
+            menu_state = "default"
+        elif selected_option == "CURRENT BETA":
+            show_message("UPDATING SATELLITE", 2)
+            updating_application = True
+            execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
+            updating_application = False
+            menu_state = "default"
+        elif selected_option == "CANCEL":
+            menu_state = "app_updates"
+            menu_selection = 0
+
 
     elif menu_state == "update":
         if selected_option == "UPDATE":
@@ -1186,14 +1362,16 @@ def show_message(message, duration):
     global timeout_flag, message_displayed
     message_displayed = True
     clear_display()
-    local_image = Image.new("1", (oled.width, oled.height))
-    local_draw = ImageDraw.Draw(local_image)
-    local_draw.text((0, 0), message, font=font12, fill=255)
-    oled.image(local_image.rotate(180))
-    oled.show()
+    with oled_lock:
+        local_image = Image.new("1", (oled.width, oled.height))
+        local_draw = ImageDraw.Draw(local_image)
+        local_draw.text((0, 0), message, font=font12, fill=255)
+        oled.image(local_image.rotate(180))
+        oled.show()
     time.sleep(duration)
     message_displayed = False
     timeout_flag = True
+
 
 if __name__ == "__main__":
     try:
