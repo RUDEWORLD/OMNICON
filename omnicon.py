@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.7
+# V4.0.0
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -857,10 +857,6 @@ def button_k3_pressed():
     last_interaction_time = time.time()
     timeout_flag = False
 
-    if button_k3.is_held:
-        # If the button is being held, do not proceed with the pressed action
-        return
-
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
     elif menu_state == "default":
@@ -871,7 +867,7 @@ def button_k3_pressed():
         menu_selection = 0
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
-    elif menu_state in ["update_confirm", "downgrade_confirm"]:
+    if menu_state in ["update_confirm", "downgrade_confirm"]:
         # Cancel action
         menu_state = "update"
         selected_version = None  # Reset selected_version
@@ -883,16 +879,11 @@ def button_k3_pressed():
 
 @debounce
 def button_k4_pressed():
-    global menu_state, menu_selection, ip_octet
-    global ip_address, subnet_mask, gateway
+    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway
     global original_ip_address, original_subnet_mask, original_gateway
     global datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
-
-    if button_k4.is_held:
-        # If the button is being held, do not proceed with the pressed action
-        return
 
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
@@ -920,7 +911,6 @@ def button_k4_pressed():
         menu_selection = 3
         activate_menu_item()
     update_oled_display()
-
     
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version
@@ -935,11 +925,9 @@ def hold_k3():
     elif menu_state in ["set_date", "set_time"]:
         menu_state = "set_datetime"
 
+
 def hold_k4():
-    global menu_state, updating_application
-    global ip_address, subnet_mask, gateway
-    global original_ip_address, original_subnet_mask, original_gateway
-    global datetime_temp, last_interaction_time, time_format_24hr, selected_version
+    global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 held for 1 seconds")
     last_interaction_time = time.time()
 
@@ -949,7 +937,7 @@ def hold_k4():
         original_ip_address = ip_address[:]
         original_subnet_mask = subnet_mask[:]
         original_gateway = gateway[:]
-        menu_state = "default"  # Change this to return to default display
+        menu_state = "set_static"
     elif menu_state in ["set_date", "set_time"]:
         set_system_datetime(datetime_temp)
         state = load_state()
@@ -957,26 +945,6 @@ def hold_k4():
         save_state(state)
         update_clock_format(time_format_24hr)
         restart_script()
-    elif menu_state == "update_confirm":
-        if selected_version:
-            result = perform_update(selected_version)
-        else:
-            result = "NO VERSION SELECTED"
-        duration = 5
-        show_message(result, duration)
-        menu_state = "default"
-        selected_version = None  # Reset selected_version
-    elif menu_state == "downgrade_confirm":
-        if selected_version:
-            result = perform_downgrade(selected_version)
-        else:
-            result = "NO VERSION SELECTED"
-        duration = 5
-        show_message(result, duration)
-        menu_state = "default"
-        selected_version = None  # Reset selected_version
-    update_oled_display()  # Update the display immediately after change
-
 
 
 def save_static_settings():
@@ -1110,15 +1078,17 @@ def update_omnicon():
         available_versions = fetch_github_tags()
         if not available_versions:
             return "PLEASE CONNECT\nTO INTERNET"
-    current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
+    # Use lstrip to remove any leading 'v' or 'V'
+    current_version_tuple = tuple(map(int, current_version.lstrip('vV').split('.')))
     newer_versions = [
         v for v in available_versions
-        if tuple(map(int, v.strip('V').split('.'))) > current_version_tuple
+        if tuple(map(int, v.lstrip('vV').split('.'))) > current_version_tuple
     ]
     if not newer_versions:
         return "YOU'RE UP TO DATE"
     selected_version = newer_versions[0]
     return "UPDATE AVAILABLE"
+
 
 def perform_update(version):
     local_path = "/home/omnicon/OLED_Stats/omnicon.py"
