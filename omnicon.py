@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.5
+# V3.3.6
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -957,6 +957,26 @@ def hold_k4():
         save_state(state)
         update_clock_format(time_format_24hr)
         restart_script()
+    elif menu_state == "update_confirm":
+        if selected_version:
+            result = perform_update(selected_version)
+        else:
+            result = "NO VERSION SELECTED"
+        duration = 5
+        show_message(result, duration)
+        menu_state = "default"
+        selected_version = None  # Reset selected_version
+    elif menu_state == "downgrade_confirm":
+        if selected_version:
+            result = perform_downgrade(selected_version)
+        else:
+            result = "NO VERSION SELECTED"
+        duration = 5
+        show_message(result, duration)
+        menu_state = "default"
+        selected_version = None  # Reset selected_version
+    update_oled_display()  # Update the display immediately after change
+
 
 def save_static_settings():
     state = load_state()
