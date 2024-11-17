@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.6
+# V3.3.7
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -949,7 +949,7 @@ def hold_k4():
         original_ip_address = ip_address[:]
         original_subnet_mask = subnet_mask[:]
         original_gateway = gateway[:]
-        menu_state = "set_static"
+        menu_state = "default"  # Change this to return to default display
     elif menu_state in ["set_date", "set_time"]:
         set_system_datetime(datetime_temp)
         state = load_state()
@@ -976,6 +976,7 @@ def hold_k4():
         menu_state = "default"
         selected_version = None  # Reset selected_version
     update_oled_display()  # Update the display immediately after change
+
 
 
 def save_static_settings():
