@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.0
+# V3.3.1
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -49,8 +49,8 @@ release_gpio_pins([BUTTON_K1, BUTTON_K2, BUTTON_K3, BUTTON_K4])
 
 # Initialize buttons
 try:
-    button_k1 = Button(BUTTON_K1, pull_up=True, hold_time=1, bounce_time=0.1)
-    button_k2 = Button(BUTTON_K2, pull_up=True, hold_time=1, bounce_time=0.1)
+    button_k1 = Button(BUTTON_K1, pull_up=True, hold_time=0.3, bounce_time=0.1, hold_repeat=True)
+    button_k2 = Button(BUTTON_K2, pull_up=True, hold_time=0.3, bounce_time=0.1, hold_repeat=True)
     button_k3 = Button(BUTTON_K3, pull_up=True, hold_time=1, bounce_time=0.1)
     button_k4 = Button(BUTTON_K4, pull_up=True, hold_time=1, bounce_time=0.1)
     logging.info('Buttons initialized successfully')
@@ -1125,8 +1125,8 @@ def main():
     button_k3.when_pressed = button_k3_pressed
     button_k4.when_pressed = button_k4_pressed
 
-    button_k1.when_held = lambda: fast_adjust_ip(button_k1, 10)  # Change value by 10 when held
-    button_k2.when_held = lambda: fast_adjust_ip(button_k2, -10)  # Change value by 10 when held
+    button_k1.when_held = lambda: fast_adjust_ip(10)
+    button_k2.when_held = lambda: fast_adjust_ip(-10)
 
     button_k3.when_held = hold_k3
     button_k4.when_held = hold_k4
@@ -1144,22 +1144,20 @@ def main():
     while True:
         time.sleep(.1)  # Check every 100ms
 
-def fast_adjust_ip(button, increment):
+def fast_adjust_ip(increment):
     global menu_state, ip_octet, ip_address, subnet_mask, gateway, datetime_temp
-    start_time = time.time()
-    while button.is_held:
-        if menu_state == "set_static_ip":
-            ip_address[ip_octet] = (ip_address[ip_octet] + increment) % 256
-        elif menu_state == "set_static_sm":
-            subnet_mask[ip_octet] = (subnet_mask[ip_octet] + increment) % 256
-        elif menu_state == "set_static_gw":
-            gateway[ip_octet] = (gateway[ip_octet] + increment) % 256
-        elif menu_state == "set_date":
-            update_date(increment)
-        elif menu_state == "set_time":
-            update_time(increment)
-        update_oled_display()  # Update the display immediately to show the changing values
-        time.sleep(.6)  # Reduce sleep time to make the changes more responsive
+    if menu_state == "set_static_ip":
+        ip_address[ip_octet] = (ip_address[ip_octet] + increment) % 256
+    elif menu_state == "set_static_sm":
+        subnet_mask[ip_octet] = (subnet_mask[ip_octet] + increment) % 256
+    elif menu_state == "set_static_gw":
+        gateway[ip_octet] = (gateway[ip_octet] + increment) % 256
+    elif menu_state == "set_date":
+        update_date(increment)
+    elif menu_state == "set_time":
+        update_time(increment)
+    update_oled_display()
+    time.sleep(.6)  # Reduce sleep time to make the changes more responsive
 
 def check_timeout():
     global last_interaction_time
