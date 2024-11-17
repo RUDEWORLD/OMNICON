@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.3
+# V3.3.4
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -857,6 +857,10 @@ def button_k3_pressed():
     last_interaction_time = time.time()
     timeout_flag = False
 
+    if button_k3.is_held:
+        # If the button is being held, do not proceed with the pressed action
+        return
+
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
     elif menu_state == "default":
@@ -867,7 +871,7 @@ def button_k3_pressed():
         menu_selection = 0
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
-    if menu_state in ["update_confirm", "downgrade_confirm"]:
+    elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Cancel action
         menu_state = "update"
         selected_version = None  # Reset selected_version
@@ -879,11 +883,16 @@ def button_k3_pressed():
 
 @debounce
 def button_k4_pressed():
-    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway
+    global menu_state, menu_selection, ip_octet
+    global ip_address, subnet_mask, gateway
     global original_ip_address, original_subnet_mask, original_gateway
     global datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
+
+    if button_k4.is_held:
+        # If the button is being held, do not proceed with the pressed action
+        return
 
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
@@ -911,6 +920,7 @@ def button_k4_pressed():
         menu_selection = 3
         activate_menu_item()
     update_oled_display()
+
     
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version
@@ -925,9 +935,11 @@ def hold_k3():
     elif menu_state in ["set_date", "set_time"]:
         menu_state = "set_datetime"
 
-
 def hold_k4():
-    global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
+    global menu_state, updating_application
+    global ip_address, subnet_mask, gateway
+    global original_ip_address, original_subnet_mask, original_gateway
+    global datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 held for 1 seconds")
     last_interaction_time = time.time()
 
@@ -945,7 +957,6 @@ def hold_k4():
         save_state(state)
         update_clock_format(time_format_24hr)
         restart_script()
-
 
 def save_static_settings():
     state = load_state()
