@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.2.02
+# V3.2.1
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -186,7 +186,7 @@ def get_active_connection():
 # DEFINE COMP & SAT VERSION FOR MENU
 companion_version = get_companion_version()
 satellite_version = get_satellite_version()
-application_menu = [f"Companion {companion_version}", f"Satellite {satellite_version}", "UPDATE BITFOCUS", "EXIT"]
+application_menu = [f"Companion {companion_version}", f"Satellite {satellite_version}", "UPDATE APPS", "EXIT"]
 
 # Function to switch network profile
 def switch_network_profile(new_profile):
@@ -314,7 +314,7 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-application_menu = ["RUN COMPANION", "RUN SATELLITE", "UPDATE BITFOCUS", "EXIT"]
+application_menu = ["RUN COMPANION", "RUN SATELLITE", "UPDATE APPS", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
 app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
 app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
@@ -1305,7 +1305,7 @@ def activate_menu_item():
     elif menu_state == "update_companion":
         if selected_option == "CURRENT STABLE":
             if is_connected():
-                show_message("UPDATING COMPANION", 2)
+                show_message("UPDATING\nCOMPANION", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
                 updating_application = False
@@ -1317,7 +1317,7 @@ def activate_menu_item():
                 menu_state = "default"
         elif selected_option == "CURRENT BETA":
             if is_connected():
-                show_message("UPDATING COMPANION", 2)
+                show_message("UPDATING\nCOMPANION", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\n" | sudo companion-update')
                 updating_application = False
@@ -1334,7 +1334,7 @@ def activate_menu_item():
     elif menu_state == "update_satellite":
         if selected_option == "CURRENT STABLE":
             if is_connected():
-                show_message("UPDATING SATELLITE", 2)
+                show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
                 updating_application = False
@@ -1346,7 +1346,7 @@ def activate_menu_item():
                 menu_state = "default"
         elif selected_option == "CURRENT BETA":
             if is_connected():
-                show_message("UPDATING SATELLITE", 2)
+                show_message("UPDATING/nSATELLITE", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
                 updating_application = False
