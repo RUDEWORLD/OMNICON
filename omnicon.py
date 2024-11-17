@@ -1054,7 +1054,7 @@ def update_omnicon():
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
-            return "NO TAGS FOUND"
+            return "PLEASE CONNECT TO INTERNET"
     current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
     newer_versions = [
         v for v in available_versions
@@ -1078,7 +1078,7 @@ def downgrade_omnicon():
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
-            return "NO TAGS FOUND"
+            return "PLEASE CONNECT TO INTERNET"
     current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
     older_versions = [
         v for v in available_versions
@@ -1333,7 +1333,7 @@ def activate_menu_item():
                 duration = 3  # Display for 3 seconds
                 show_message(result, duration)
                 menu_state = "default"
-            elif result == "NO TAGS FOUND":
+            elif result == "PLEASE CONNECT TO INTERNET":
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"
@@ -1345,7 +1345,7 @@ def activate_menu_item():
                 duration = 3  # Display for 3 seconds
                 show_message(result, duration)
                 menu_state = "default"
-            elif result == "NO TAGS FOUND":
+            elif result == "PLEASE CONNECT TO INTERNET":
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"
