@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.3.1
+# V3.3.3
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -640,19 +640,29 @@ def update_oled_display():
 
         elif menu_state == "update_confirm":
             if selected_version is None:
-                selected_version = "Unknown"
+                display_version = "Unknown"
+            else:
+                display_version = selected_version
             local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
-            local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+            local_draw.text((0, 16), f"AVAILABLE: {display_version}", font=font11, fill=255)
+            local_draw.text((0, 32), "CANCEL", font=font11, fill=255)
+            local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY", font=font11, fill=255)
+            local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+
 
         elif menu_state == "downgrade_confirm":
             if selected_version is None:
-                selected_version = "Unknown"
+                display_version = "Unknown"
+            else:
+                display_version = selected_version
             local_draw.text((0, 0), f"CURRENT: {current_version}", font=font11, fill=255)
-            local_draw.text((0, 16), f"AVAILABLE: {selected_version}", font=font11, fill=255)
-            local_draw.text((0, 32), "CANCEL : 1 SECOND  ◀", font=font11, fill=255)
-            local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
+            local_draw.text((0, 16), f"AVAILABLE: {display_version}", font=font11, fill=255)
+            local_draw.text((0, 32), "CANCEL", font=font11, fill=255)
+            local_draw.text((112, 32), indicators["K3"], font=font11, fill=255)
+            local_draw.text((0, 48), "APPLY", font=font11, fill=255)
+            local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+
 
         elif menu_state in ["upgrade_select", "downgrade_select"]:
             for i, version in enumerate(available_versions[:3]):
@@ -857,9 +867,11 @@ def button_k3_pressed():
         menu_selection = 0
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
-    elif menu_state in ["update_confirm", "downgrade_confirm"]:
-        # Do nothing on short press
-        pass
+    if menu_state in ["update_confirm", "downgrade_confirm"]:
+        # Cancel action
+        menu_state = "update"
+        selected_version = None  # Reset selected_version
+        update_oled_display()
     else:
         menu_selection = 2
         activate_menu_item()
@@ -867,25 +879,39 @@ def button_k3_pressed():
 
 @debounce
 def button_k4_pressed():
-    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway
+    global original_ip_address, original_subnet_mask, original_gateway
+    global datetime_temp, last_interaction_time, time_format_24hr, selected_version
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
-    timeout_flag = False
 
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state == "default":
-        menu_state = "show_network_info"  # Added to display network stats
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
-    elif menu_state in ["update_confirm", "downgrade_confirm"]:
-        # Do nothing on short press
-        pass
+    elif menu_state == "update_confirm":
+        if selected_version:
+            result = perform_update(selected_version)
+        else:
+            result = "NO VERSION SELECTED"
+        duration = 5
+        show_message(result, duration)
+        menu_state = "default"
+        selected_version = None  # Reset selected_version
+    elif menu_state == "downgrade_confirm":
+        if selected_version:
+            result = perform_downgrade(selected_version)
+        else:
+            result = "NO VERSION SELECTED"
+        duration = 5
+        show_message(result, duration)
+        menu_state = "default"
+        selected_version = None  # Reset selected_version
     else:
         menu_selection = 3
         activate_menu_item()
     update_oled_display()
-
+    
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version
     logging.debug("K3 held for 1 seconds")
@@ -898,10 +924,7 @@ def hold_k3():
         menu_state = "set_static"
     elif menu_state in ["set_date", "set_time"]:
         menu_state = "set_datetime"
-    elif menu_state in ["update_confirm", "downgrade_confirm"]:
-        menu_state = "update"
-        selected_version = None  # Reset selected_version
-    update_oled_display()  # Update the display immediately after change
+
 
 def hold_k4():
     global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
@@ -922,13 +945,6 @@ def hold_k4():
         save_state(state)
         update_clock_format(time_format_24hr)
         restart_script()
-    elif menu_state in ["update_omnicon_confirm", "downgrade_omnicon_confirm"]:
-        result = perform_update(selected_version) if menu_state == "update_omnicon_confirm" else perform_downgrade(selected_version)
-        duration = 5
-        show_message(result, duration)
-        menu_state = "default"
-        selected_version = None  # Reset selected_version
-    update_oled_display()  # Update the display immediately after change
 
 
 def save_static_settings():
@@ -1057,6 +1073,7 @@ def fetch_github_tags():
 
 def update_omnicon():
     global available_versions, current_version, selected_version
+    selected_version = None  # Initialize selected_version to None
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
@@ -1081,6 +1098,7 @@ def perform_update(version):
 
 def downgrade_omnicon():
     global available_versions, current_version, selected_version
+    selected_version = None  # Initialize selected_version to None
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
