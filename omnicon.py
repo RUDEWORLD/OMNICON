@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V3.1.9
+# V3.2.02
 # 11/17/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -23,6 +23,7 @@ import sys
 import psutil  # Added for accurate CPU usage
 import requests
 import re
+import socket
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -149,6 +150,16 @@ def load_state():
             "time_format_24hr": True
         }
 
+def is_connected():
+    try:
+        # Try to connect to a known server (Google DNS)
+        socket.create_connection(("8.8.8.8", 53), timeout=2)
+        return True
+    except OSError:
+        pass
+    return False
+
+
 # Function to save state to file
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
@@ -175,7 +186,7 @@ def get_active_connection():
 # DEFINE COMP & SAT VERSION FOR MENU
 companion_version = get_companion_version()
 satellite_version = get_satellite_version()
-application_menu = [f"Companion {companion_version}", f"Satellite {satellite_version}", "APP UPDATER", "EXIT"]
+application_menu = [f"Companion {companion_version}", f"Satellite {satellite_version}", "UPDATE BITFOCUS", "EXIT"]
 
 # Function to switch network profile
 def switch_network_profile(new_profile):
@@ -303,7 +314,7 @@ message_displayed = False
 
 # Menu options
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
-application_menu = ["RUN COMPANION", "RUN SATELLITE", "APP UPDATER", "EXIT"]
+application_menu = ["RUN COMPANION", "RUN SATELLITE", "UPDATE BITFOCUS", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
 app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
 app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
@@ -1054,7 +1065,7 @@ def update_omnicon():
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
-            return "PLEASE CONNECT TO INTERNET"
+            return "PLEASE CONNECT\nTO INTERNET"
     current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
     newer_versions = [
         v for v in available_versions
@@ -1078,7 +1089,7 @@ def downgrade_omnicon():
     if not available_versions:
         available_versions = fetch_github_tags()
         if not available_versions:
-            return "PLEASE CONNECT TO INTERNET"
+            return "PLEASE CONNECT\nTO INTERNET"
     current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
     older_versions = [
         v for v in available_versions
@@ -1293,34 +1304,58 @@ def activate_menu_item():
 
     elif menu_state == "update_companion":
         if selected_option == "CURRENT STABLE":
-            show_message("UPDATING COMPANION", 2)
-            updating_application = True
-            execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
-            updating_application = False
-            menu_state = "default"
+            if is_connected():
+                show_message("UPDATING COMPANION", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
         elif selected_option == "CURRENT BETA":
-            show_message("UPDATING COMPANION", 2)
-            updating_application = True
-            execute_command_with_progress('echo -e "\\n" | sudo companion-update')
-            updating_application = False
-            menu_state = "default"
+            if is_connected():
+                show_message("UPDATING COMPANION", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\n" | sudo companion-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
         elif selected_option == "CANCEL":
             menu_state = "app_updates"
             menu_selection = 0
 
     elif menu_state == "update_satellite":
         if selected_option == "CURRENT STABLE":
-            show_message("UPDATING SATELLITE", 2)
-            updating_application = True
-            execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
-            updating_application = False
-            menu_state = "default"
+            if is_connected():
+                show_message("UPDATING SATELLITE", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
         elif selected_option == "CURRENT BETA":
-            show_message("UPDATING SATELLITE", 2)
-            updating_application = True
-            execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
-            updating_application = False
-            menu_state = "default"
+            if is_connected():
+                show_message("UPDATING SATELLITE", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
         elif selected_option == "CANCEL":
             menu_state = "app_updates"
             menu_selection = 0
@@ -1333,7 +1368,7 @@ def activate_menu_item():
                 duration = 3  # Display for 3 seconds
                 show_message(result, duration)
                 menu_state = "default"
-            elif result == "PLEASE CONNECT TO INTERNET":
+            elif result == "PLEASE CONNECT\nTO INTERNET":
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"
@@ -1345,7 +1380,7 @@ def activate_menu_item():
                 duration = 3  # Display for 3 seconds
                 show_message(result, duration)
                 menu_state = "default"
-            elif result == "PLEASE CONNECT TO INTERNET":
+            elif result == "PLEASE CONNECT\nTO INTERNET":
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"
@@ -1365,7 +1400,18 @@ def show_message(message, duration):
     with oled_lock:
         local_image = Image.new("1", (oled.width, oled.height))
         local_draw = ImageDraw.Draw(local_image)
-        local_draw.text((0, 0), message, font=font12, fill=255)
+        # Split message into lines
+        lines = message.split('\n')
+        font = font12
+        # Calculate the total height of the text
+        total_height = sum([local_draw.textsize(line, font=font)[1] for line in lines])
+        # Starting y position
+        y = (oled.height - total_height) // 2
+        for line in lines:
+            line_width, line_height = local_draw.textsize(line, font=font)
+            x = (oled.width - line_width) // 2
+            local_draw.text((x, y), line, font=font, fill=255)
+            y += line_height
         oled.image(local_image.rotate(180))
         oled.show()
     time.sleep(duration)
