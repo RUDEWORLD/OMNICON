@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.1.0
+# V4.1.1
 # 11/21/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1096,26 +1096,51 @@ def set_system_datetime(datetime_temp):
     return result
 
 def restart_script():
-    """Restarts the current script by restarting the systemd service."""
-    logging.info("Restarting script via systemd...")
+    """Restarts both omnicon and web GUI services properly."""
+    logging.info("Restarting services after update...")
 
-    # First, restart the web GUI service to ensure it gets the new files
-    try:
-        subprocess.run(["sudo", "systemctl", "restart", "omnicon-web-simple.service"],
-                      capture_output=True, text=True, timeout=5)
-        logging.info("Web GUI service restarted")
-    except Exception as e:
-        logging.warning(f"Failed to restart web GUI: {e}")
+    # Create a restart script that will run independently
+    restart_script_content = """#!/bin/bash
+# Wait for the current process to exit
+sleep 3
 
-    # Now restart ourselves via systemd
-    # This will properly restart the service with the new code
+# Stop both services
+sudo systemctl stop omnicon-web-simple.service
+sudo systemctl stop omnicon.service
+
+# Wait a moment
+sleep 2
+
+# Start both services with new code
+sudo systemctl start omnicon.service
+sudo systemctl start omnicon-web-simple.service
+
+# Remove this temp script
+rm -f /tmp/restart_omnicon.sh
+"""
+
     try:
-        subprocess.run(["sudo", "systemctl", "restart", "omnicon.service"],
-                      capture_output=True, text=True, timeout=5)
-        logging.info("Omnicon service restart initiated")
+        # Write the restart script
+        with open('/tmp/restart_omnicon.sh', 'w') as f:
+            f.write(restart_script_content)
+
+        # Make it executable
+        os.chmod('/tmp/restart_omnicon.sh', 0o755)
+
+        # Launch the restart script in the background
+        subprocess.Popen(['/bin/bash', '/tmp/restart_omnicon.sh'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True)
+
+        logging.info("Restart script launched, exiting current process...")
+
+        # Exit cleanly so the restart script can do its work
+        sys.exit(0)
+
     except Exception as e:
-        logging.error(f"Failed to restart via systemd: {e}")
-        # Fallback to the old method if systemd restart fails
+        logging.error(f"Failed to create restart script: {e}")
+        # Fallback to the old method
         logging.info("Falling back to direct restart")
         os.execv(sys.executable, ['python3'] + sys.argv)
 
