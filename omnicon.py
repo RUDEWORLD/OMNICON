@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.0.5
+# V4.0.6
 # 11/21/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -546,7 +546,7 @@ def update_oled_display():
             local_draw.text((95, 16), port, font=font11, fill=255)
             local_draw.text((0, 32), f"{current_time_str}", font=font12, fill=255)
             local_draw.text((90, 32), Temp, font=font11, fill=255)
-            local_draw.text((0, 48), "omniconpro.com /4.0.5", font=font11, fill=255)
+            local_draw.text((0, 48), "omniconpro.com / help", font=font11, fill=255)
 
         elif menu_state == "application":
             # Refresh versions

@@ -1,1 +1,0 @@
-{"service": "companion", "network": "DHCP", "static_ip": [192, 168, 0, 102], "subnet_mask": [255, 255, 255, 0], "gateway": [192, 168, 1, 1], "satellite_target_ip": [190, 168, 1, 200], "time_format_24hr": false}
