@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.0.7
+# V4.0.8
 # 11/21/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1624,123 +1624,15 @@ def process_web_commands():
                             turn_off_oled()
                             execute_command("sudo shutdown now")
 
-                    elif command == 'button_press':
-                        button = params.get('button')
-                        logging.info(f"Simulating {button} press via web")
-                        # Reset interaction time to prevent timeout
-                        global last_interaction_time
-                        last_interaction_time = time.time()
-
-                        # Simulate button press
-                        if button == 'K1':
-                            button_k1_pressed()
-                        elif button == 'K2':
-                            button_k2_pressed()
-                        elif button == 'K3':
-                            button_k3_pressed()
-                        elif button == 'K4':
-                            button_k4_pressed()
-
-                        # Force display update
-                        update_oled_display()
-
-                    elif command == 'set_datetime':
-                        # Handle date/time setting
-                        if 'date' in params and 'time' in params:
-                            datetime_str = f"{params['date']} {params['time']}"
-                            execute_command(f"sudo timedatectl set-ntp false")
-                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
-                            logging.info(f"Set date/time to {datetime_str} via web")
-
-                        if 'format_24hr' in params:
-                            time_format_24hr = params['format_24hr']
-                            state = load_state()
-                            state['time_format_24hr'] = time_format_24hr
-                            save_state(state)
-                            update_clock_format(time_format_24hr)
-                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
-
-                    elif command == 'menu_navigate':
-                        # Direct menu navigation
-                        target_menu = params.get('menu')
-                        if target_menu:
-                            menu_state = target_menu
-                            menu_selection = 0
-                            update_oled_display()
-                            logging.info(f"Navigated to {target_menu} menu via web")
-
-                    # Remove command file after processing
-                    os.remove(web_command_file)
-
-        except Exception as e:
-            logging.error(f"Error processing web command: {e}")
-
-        # Check every 0.5 seconds for new commands
-        time.sleep(0.5)
-
-
-# Web command processor for remote control
-web_command_file = "web_command.json"
-trigger_file = "trigger_command"
-
-def process_web_commands():
-    """Process commands from the web GUI"""
-    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
-
-    while True:
-        try:
-            # Check if there's a trigger file
-            if os.path.exists(trigger_file):
-                os.remove(trigger_file)  # Remove trigger
-
-                # Check for command file
-                if os.path.exists(web_command_file):
-                    with open(web_command_file, 'r') as f:
-                        cmd_data = json.load(f)
-
-                    command = cmd_data.get('command')
-                    params = cmd_data.get('params', {})
-
-                    logging.info(f"Processing web command: {command}")
-
-                    # Process different commands
-                    if command == 'toggle_service':
-                        service = params.get('service')
-                        if service in ['companion', 'satellite']:
-                            toggle_service(service)
-                            logging.info(f"Toggled to {service} via web")
-
-                    elif command == 'toggle_network':
-                        network = params.get('network')
-                        if network in ['DHCP', 'STATIC']:
-                            toggle_network(network)
-                            logging.info(f"Toggled to {network} via web")
-
-                    elif command == 'set_static_ip':
-                        # Parse IP settings
-                        ip_str = params.get('ip', '192.168.0.100')
-                        subnet_str = params.get('subnet', '255.255.255.0')
-                        gateway_str = params.get('gateway', '192.168.0.1')
-
-                        # Convert to lists
-                        ip_address = [int(x) for x in ip_str.split('.')]
-                        subnet_mask = [int(x) for x in subnet_str.split('.')]
-                        gateway = [int(x) for x in gateway_str.split('.')]
-
-                        save_static_settings()
-                        apply_static_settings()
-                        logging.info("Applied static IP settings via web")
-
-                    elif command == 'power':
-                        action = params.get('action')
-                        if action == 'reboot':
-                            logging.info("Rebooting system via web command")
-                            turn_off_oled()
-                            execute_command("sudo reboot")
-                        elif action == 'shutdown':
-                            logging.info("Shutting down system via web command")
-                            turn_off_oled()
-                            execute_command("sudo shutdown now")
+                    elif command == 'update_omnicon':
+                        version = params.get('version')
+                        if version:
+                            logging.info(f"Starting Omnicon update to version {version} via web")
+                            # Perform the update
+                            result = perform_update(version)
+                            logging.info(f"Update result: {result}")
+                        else:
+                            logging.error("No version specified for update")
 
                     elif command == 'button_press':
                         button = params.get('button')
@@ -1859,6 +1751,144 @@ def process_web_commands():
                             logging.info("Shutting down system via web command")
                             turn_off_oled()
                             execute_command("sudo shutdown now")
+
+                    elif command == 'update_omnicon':
+                        version = params.get('version')
+                        if version:
+                            logging.info(f"Starting Omnicon update to version {version} via web")
+                            # Perform the update
+                            result = perform_update(version)
+                            logging.info(f"Update result: {result}")
+                        else:
+                            logging.error("No version specified for update")
+
+                    elif command == 'button_press':
+                        button = params.get('button')
+                        logging.info(f"Simulating {button} press via web")
+                        # Reset interaction time to prevent timeout
+                        global last_interaction_time
+                        last_interaction_time = time.time()
+
+                        # Simulate button press
+                        if button == 'K1':
+                            button_k1_pressed()
+                        elif button == 'K2':
+                            button_k2_pressed()
+                        elif button == 'K3':
+                            button_k3_pressed()
+                        elif button == 'K4':
+                            button_k4_pressed()
+
+                        # Force display update
+                        update_oled_display()
+
+                    elif command == 'set_datetime':
+                        # Handle date/time setting
+                        if 'date' in params and 'time' in params:
+                            datetime_str = f"{params['date']} {params['time']}"
+                            execute_command(f"sudo timedatectl set-ntp false")
+                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                            logging.info(f"Set date/time to {datetime_str} via web")
+
+                        if 'format_24hr' in params:
+                            time_format_24hr = params['format_24hr']
+                            state = load_state()
+                            state['time_format_24hr'] = time_format_24hr
+                            save_state(state)
+                            update_clock_format(time_format_24hr)
+                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
+
+                    elif command == 'menu_navigate':
+                        # Direct menu navigation
+                        target_menu = params.get('menu')
+                        if target_menu:
+                            menu_state = target_menu
+                            menu_selection = 0
+                            update_oled_display()
+                            logging.info(f"Navigated to {target_menu} menu via web")
+
+                    # Remove command file after processing
+                    os.remove(web_command_file)
+
+        except Exception as e:
+            logging.error(f"Error processing web command: {e}")
+
+        # Check every 0.5 seconds for new commands
+        time.sleep(0.5)
+
+
+# Web command processor for remote control
+web_command_file = "web_command.json"
+trigger_file = "trigger_command"
+
+def process_web_commands():
+    """Process commands from the web GUI"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                os.remove(trigger_file)  # Remove trigger
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    with open(web_command_file, 'r') as f:
+                        cmd_data = json.load(f)
+
+                    command = cmd_data.get('command')
+                    params = cmd_data.get('params', {})
+
+                    logging.info(f"Processing web command: {command}")
+
+                    # Process different commands
+                    if command == 'toggle_service':
+                        service = params.get('service')
+                        if service in ['companion', 'satellite']:
+                            toggle_service(service)
+                            logging.info(f"Toggled to {service} via web")
+
+                    elif command == 'toggle_network':
+                        network = params.get('network')
+                        if network in ['DHCP', 'STATIC']:
+                            toggle_network(network)
+                            logging.info(f"Toggled to {network} via web")
+
+                    elif command == 'set_static_ip':
+                        # Parse IP settings
+                        ip_str = params.get('ip', '192.168.0.100')
+                        subnet_str = params.get('subnet', '255.255.255.0')
+                        gateway_str = params.get('gateway', '192.168.0.1')
+
+                        # Convert to lists
+                        ip_address = [int(x) for x in ip_str.split('.')]
+                        subnet_mask = [int(x) for x in subnet_str.split('.')]
+                        gateway = [int(x) for x in gateway_str.split('.')]
+
+                        save_static_settings()
+                        apply_static_settings()
+                        logging.info("Applied static IP settings via web")
+
+                    elif command == 'power':
+                        action = params.get('action')
+                        if action == 'reboot':
+                            logging.info("Rebooting system via web command")
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        elif action == 'shutdown':
+                            logging.info("Shutting down system via web command")
+                            turn_off_oled()
+                            execute_command("sudo shutdown now")
+
+                    elif command == 'update_omnicon':
+                        version = params.get('version')
+                        if version:
+                            logging.info(f"Starting Omnicon update to version {version} via web")
+                            # Perform the update
+                            result = perform_update(version)
+                            logging.info(f"Update result: {result}")
+                        else:
+                            logging.error("No version specified for update")
 
                     elif command == 'button_press':
                         button = params.get('button')

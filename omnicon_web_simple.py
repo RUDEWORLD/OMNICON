@@ -17,6 +17,7 @@ import secrets
 import psutil
 from datetime import datetime
 import threading
+import requests
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -27,7 +28,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "1.022"  # Updated to support full ZIP-based updates from GitHub
+WEB_GUI_VERSION = "1.023"  # Added Omnicon update functionality with version display
 
 # Configuration
 STATE_FILE = "state.json"
@@ -752,6 +753,85 @@ class SimpleTerminalSession:
                     self.process.kill()
             except:
                 pass
+
+# Omnicon Update API routes
+@app.route('/api/omnicon/check_update')
+@login_required
+def api_check_omnicon_update():
+    """Check for Omnicon updates from GitHub"""
+    try:
+        # Get current version from omnicon.py
+        current_version = None
+        try:
+            with open('/home/omnicon/OLED_Stats/omnicon.py', 'r') as f:
+                for line in f:
+                    if line.startswith("# V"):
+                        current_version = line.strip().split(' ')[1]
+                        break
+        except:
+            current_version = "Unknown"
+
+        # Fetch available versions from GitHub
+        try:
+            response = requests.get("https://api.github.com/repos/RUDEWORLD/OMNICON/tags", timeout=10)
+            response.raise_for_status()
+            tags = response.json()
+            available_versions = [tag['name'] for tag in tags]
+
+            # Get the latest version
+            if available_versions:
+                latest_version = available_versions[0]
+            else:
+                latest_version = current_version
+
+        except Exception as e:
+            logging.error(f"Failed to fetch GitHub tags: {e}")
+            latest_version = "Check Failed"
+            available_versions = []
+
+        # Check if update is available
+        update_available = False
+        if current_version != "Unknown" and latest_version != "Check Failed":
+            try:
+                current_tuple = tuple(map(int, current_version.strip('V').split('.')))
+                latest_tuple = tuple(map(int, latest_version.strip('V').split('.')))
+                update_available = latest_tuple > current_tuple
+            except:
+                pass
+
+        return jsonify({
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'available_versions': available_versions,
+            'update_available': update_available
+        })
+
+    except Exception as e:
+        logging.error(f"Error checking for updates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/omnicon/update', methods=['POST'])
+@login_required
+def api_update_omnicon():
+    """Trigger Omnicon update via omnicon.py command"""
+    try:
+        data = request.get_json()
+        version = data.get('version')
+
+        if not version:
+            return jsonify({"success": False, "error": "No version specified"}), 400
+
+        # Send update command to omnicon.py - it will handle the update process
+        success = send_command_to_omnicon('update_omnicon', {'version': version})
+
+        if success:
+            return jsonify({"success": True, "message": f"Updating to {version}. The system will restart."})
+        else:
+            return jsonify({"success": False, "error": "Failed to send update command"}), 500
+
+    except Exception as e:
+        logging.error(f"Error updating omnicon: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # Terminal API routes
 @app.route('/api/terminal/start', methods=['POST'])

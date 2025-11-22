@@ -357,59 +357,129 @@ function updateSatellite() {
     });
 }
 
-// Show Omnicon update modal
-function showOmniconUpdate() {
+// Check Omnicon version (for display)
+function checkOmniconVersion() {
     $.ajax({
-        url: '/api/update/check',
+        url: '/api/omnicon/check_update',
         method: 'GET',
         success: function(data) {
-            let html = '';
+            $('#currentOmniconVersion').text(data.current_version || '--');
+            $('#availableOmniconVersion').text(data.latest_version || '--');
 
-            if (data.available_versions && data.available_versions.length > 0) {
-                data.available_versions.forEach(function(version) {
-                    const isCurrent = version === data.current_versions.omnicon;
-                    html += `
-                        <a href="#" class="list-group-item list-group-item-action ${isCurrent ? 'active' : ''}"
-                           onclick="updateOmnicon('${version}'); return false;">
-                            ${version} ${isCurrent ? '(Current)' : ''}
-                        </a>
-                    `;
-                });
-            } else {
-                html = '<div class="text-center p-3">No versions available</div>';
-            }
-
-            $('#updateVersionList').html(html);
-            const modal = new bootstrap.Modal(document.getElementById('omniconUpdateModal'));
-            modal.show();
+            // Store data globally for modal use
+            window.omniconUpdateData = data;
         },
         error: function(xhr) {
-            showToast('Error', 'Failed to fetch available versions', 'error');
+            console.error('Failed to check Omnicon version:', xhr);
+            $('#currentOmniconVersion').text('Error');
+            $('#availableOmniconVersion').text('Error');
         }
     });
 }
 
-// Update Omnicon
-function updateOmnicon(version) {
-    if (!confirm(`Update Omnicon to version ${version}? The script will restart.`)) {
+// Show Omnicon update modal
+function showOmniconUpdate() {
+    const modal = new bootstrap.Modal(document.getElementById('omniconUpdateModal'));
+    modal.show();
+
+    // Reset modal state
+    $('#updateCheckStatus').show();
+    $('#updateVersionInfo').hide();
+    $('#updateButton').hide();
+
+    // Check for updates
+    $.ajax({
+        url: '/api/omnicon/check_update',
+        method: 'GET',
+        success: function(data) {
+            $('#updateCheckStatus').hide();
+            $('#updateVersionInfo').show();
+
+            $('#modalCurrentVersion').text(data.current_version || 'Unknown');
+            $('#modalLatestVersion').text(data.latest_version || 'Unknown');
+
+            // Store latest version for update
+            window.selectedOmniconVersion = data.latest_version;
+
+            if (data.update_available) {
+                $('#updateMessage').html('<div class="alert alert-success">An update is available!</div>');
+                $('#updateButton').show();
+            } else if (data.current_version === 'Unknown' || data.latest_version === 'Check Failed') {
+                $('#updateMessage').html('<div class="alert alert-warning">Unable to check for updates. Please check your internet connection.</div>');
+            } else {
+                $('#updateMessage').html('<div class="alert alert-info">You are running the latest version.</div>');
+            }
+
+            // Show available versions list
+            if (data.available_versions && data.available_versions.length > 0) {
+                let html = '<h6 class="mt-3">Available Versions:</h6>';
+                html += '<div class="list-group" style="max-height: 200px; overflow-y: auto;">';
+                data.available_versions.forEach(function(version) {
+                    const isCurrent = version === data.current_version;
+                    const badge = isCurrent ? ' <span class="badge bg-success">Current</span>' : '';
+                    html += `
+                        <a href="#" class="list-group-item list-group-item-action ${isCurrent ? 'active' : ''}"
+                           onclick="selectOmniconVersion('${version}'); return false;">
+                            <div class="d-flex w-100 justify-content-between">
+                                <small>${version}${badge}</small>
+                            </div>
+                        </a>
+                    `;
+                });
+                html += '</div>';
+                $('#updateVersionList').html(html);
+            }
+        },
+        error: function(xhr) {
+            $('#updateCheckStatus').hide();
+            $('#updateVersionInfo').show();
+            $('#updateMessage').html('<div class="alert alert-danger">Failed to check for updates. Please try again later.</div>');
+        }
+    });
+}
+
+// Select a specific version to update to
+function selectOmniconVersion(version) {
+    window.selectedOmniconVersion = version;
+    $('#updateButton').show().html(`<i class="fas fa-download"></i> Update to ${version}`);
+}
+
+// Perform Omnicon update
+function performOmniconUpdate() {
+    const version = window.selectedOmniconVersion;
+    if (!version) {
+        showToast('Error', 'No version selected', 'error');
         return;
     }
 
+    if (!confirm(`Update Omnicon to version ${version}? The system will restart.`)) {
+        return;
+    }
+
+    // Disable button and show loading state
+    $('#updateButton').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Updating...');
+
     $.ajax({
-        url: '/api/update/omnicon',
+        url: '/api/omnicon/update',
         method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({version: version}),
         success: function(data) {
-            showToast('Success', `Omnicon updated to ${version}`, 'success');
+            showToast('Success', `Updating to ${version}. The system will restart.`, 'success');
             bootstrap.Modal.getInstance(document.getElementById('omniconUpdateModal')).hide();
+
+            // Show a permanent notification that the system is restarting
             setTimeout(function() {
-                location.reload();
-            }, 3000);
+                alert('Omnicon is updating and will restart. The page will reload in 10 seconds.');
+                setTimeout(function() {
+                    location.reload();
+                }, 10000);
+            }, 1000);
         },
         error: function(xhr) {
             const response = xhr.responseJSON;
             showToast('Error', response.error || 'Failed to update Omnicon', 'error');
+            $('#updateButton').prop('disabled', false).html(`<i class="fas fa-download"></i> Update to ${version}`);
         }
     });
 }
