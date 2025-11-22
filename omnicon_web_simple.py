@@ -27,7 +27,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "1.021"  # Removed unnecessary script restart when setting date/time
+WEB_GUI_VERSION = "1.022"  # Updated to support full ZIP-based updates from GitHub
 
 # Configuration
 STATE_FILE = "state.json"
