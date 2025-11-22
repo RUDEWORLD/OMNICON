@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.0.9
+# V4.1.0
 # 11/21/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1096,9 +1096,28 @@ def set_system_datetime(datetime_temp):
     return result
 
 def restart_script():
-    """Restarts the current script."""
-    logging.info("Restarting script...")
-    os.execv(sys.executable, ['python3'] + sys.argv)
+    """Restarts the current script by restarting the systemd service."""
+    logging.info("Restarting script via systemd...")
+
+    # First, restart the web GUI service to ensure it gets the new files
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "omnicon-web-simple.service"],
+                      capture_output=True, text=True, timeout=5)
+        logging.info("Web GUI service restarted")
+    except Exception as e:
+        logging.warning(f"Failed to restart web GUI: {e}")
+
+    # Now restart ourselves via systemd
+    # This will properly restart the service with the new code
+    try:
+        subprocess.run(["sudo", "systemctl", "restart", "omnicon.service"],
+                      capture_output=True, text=True, timeout=5)
+        logging.info("Omnicon service restart initiated")
+    except Exception as e:
+        logging.error(f"Failed to restart via systemd: {e}")
+        # Fallback to the old method if systemd restart fails
+        logging.info("Falling back to direct restart")
+        os.execv(sys.executable, ['python3'] + sys.argv)
 
 def subnet_mask_to_cidr(mask):
     mask_octets = map(int, mask.split('.'))

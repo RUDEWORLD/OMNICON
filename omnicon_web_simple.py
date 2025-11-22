@@ -28,7 +28,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "1.023"  # Added Omnicon update functionality with version display
+WEB_GUI_VERSION = "4.1.0"  # Synchronized with omnicon.py version for unified tracking
 
 # Configuration
 STATE_FILE = "state.json"
