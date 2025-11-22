@@ -1,0 +1,439 @@
+{% extends "base.html" %}
+
+{% block title %}Update Terminal - Omnicon{% endblock %}
+
+{% block extra_css %}
+<style>
+    #terminal {
+        background-color: #000;
+        color: #0f0;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        padding: 20px;
+        height: 500px;
+        overflow-y: auto;
+        border-radius: 5px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+
+    #terminal-input {
+        background-color: #111;
+        color: #0f0;
+        font-family: 'Courier New', monospace;
+        border: 1px solid #0f0;
+        padding: 10px;
+        width: 100%;
+        font-size: 14px;
+    }
+
+    .terminal-line {
+        margin: 2px 0;
+    }
+
+    .terminal-prompt {
+        color: #0ff;
+    }
+
+    .terminal-error {
+        color: #f00;
+    }
+
+    .terminal-success {
+        color: #0f0;
+    }
+
+    .update-buttons {
+        margin: 20px 0;
+    }
+
+    .btn-terminal {
+        margin-right: 10px;
+        margin-bottom: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-terminal"></i> Update Terminal
+                        <span id="terminal-status" class="float-end badge bg-success">Ready</span>
+                    </h5>
+                </div>
+                <div class="card-body bg-dark">
+                    <!-- Quick Launch Buttons -->
+                    <div class="update-buttons">
+                        <button class="btn btn-primary btn-terminal" onclick="startCompanionUpdate()">
+                            <i class="fas fa-satellite-dish"></i> Update Companion
+                        </button>
+                        <button class="btn btn-info btn-terminal" onclick="startSatelliteUpdate()">
+                            <i class="fas fa-satellite"></i> Update Satellite
+                        </button>
+                        <button class="btn btn-warning btn-terminal" onclick="clearTerminal()">
+                            <i class="fas fa-broom"></i> Clear
+                        </button>
+                        <button class="btn btn-danger btn-terminal" onclick="sendKey('ctrl-c')">
+                            <i class="fas fa-stop"></i> Stop (Ctrl+C)
+                        </button>
+                        <button class="btn btn-success btn-terminal" onclick="sendKey('enter')">
+                            <i class="fas fa-arrow-right"></i> Enter
+                        </button>
+                        <button class="btn btn-secondary btn-terminal" onclick="sendKey('up')">
+                            <i class="fas fa-arrow-up"></i> Up
+                        </button>
+                        <button class="btn btn-secondary btn-terminal" onclick="sendKey('down')">
+                            <i class="fas fa-arrow-down"></i> Down
+                        </button>
+                    </div>
+
+                    <!-- Terminal Display -->
+                    <div id="terminal"></div>
+
+                    <!-- Input Field -->
+                    <div class="input-group mt-3">
+                        <span class="input-group-text bg-dark text-success">$</span>
+                        <input type="text" id="terminal-input" class="form-control"
+                               placeholder="Type command or use buttons above..."
+                               onkeypress="handleKeyPress(event)">
+                        <button class="btn btn-success" onclick="sendInput()">
+                            <i class="fas fa-paper-plane"></i> Send
+                        </button>
+                    </div>
+
+                    <!-- Help Text -->
+                    <div class="alert alert-info mt-3">
+                        <small>
+                            <strong>Tips:</strong>
+                            <ul class="mb-0">
+                                <li>Use arrow keys to navigate menu options in update tools</li>
+                                <li>Press Enter to select a version</li>
+                                <li>Use Stop button to cancel/exit the update process</li>
+                                <li>The terminal will show the update progress in real-time</li>
+                            </ul>
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let updateInterval = null;
+    let isRunning = false;
+
+    // Append text to terminal
+    function appendToTerminal(text, className = '') {
+        const terminal = document.getElementById('terminal');
+        if (className) {
+            const line = document.createElement('div');
+            line.className = 'terminal-line ' + className;
+            line.textContent = text;
+            terminal.appendChild(line);
+        } else {
+            // For raw output, preserve formatting
+            terminal.innerHTML += text;
+        }
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    // Clear terminal
+    function clearTerminal() {
+        document.getElementById('terminal').innerHTML = '';
+        appendToTerminal('Terminal cleared\n', 'terminal-success');
+    }
+
+    let lastOutputLength = 0;
+    let menuMode = false;
+    let lastMenuContent = '';
+
+    // Get terminal output
+    function getOutput() {
+        if (!isRunning) return;
+
+        $.ajax({
+            url: '/api/terminal/output',
+            method: 'GET',
+            success: function(data) {
+                if (data.output) {
+                    const terminal = document.getElementById('terminal');
+
+                    // Check if we're in menu mode (contains any menu-like selection with escape codes)
+                    const isMenuUpdate = data.output.includes('\x1b[') ||
+                                       data.output.includes('What version do you want?') ||
+                                       data.output.includes('latest stable') ||
+                                       data.output.includes('latest beta') ||
+                                       data.output.includes('specific stable') ||
+                                       data.output.includes('specific beta') ||
+                                       data.output.includes('custom-url') ||
+                                       data.output.includes('Which version do you want?') ||
+                                       data.output.includes('(Use arrow keys');
+
+                    if (isMenuUpdate) {
+                        // Always clear and redraw for menu navigation
+                        const lines = data.output.split('\n');
+                        let menuContent = [];
+                        let foundMenu = false;
+
+                        // Find the LAST complete menu in the output
+                        // Look backwards for the most recent menu prompt
+                        for (let i = lines.length - 1; i >= 0; i--) {
+                            if (lines[i].includes('What version do you want?') ||
+                                lines[i].includes('Which version do you want?')) {
+                                // Found the start of a menu, extract from here
+                                foundMenu = true;
+
+                                // Get the question line
+                                if (i > 0 && lines[i-1]) menuContent.push(lines[i-1]);
+                                menuContent.push(lines[i]);
+
+                                // Get all menu items after this point
+                                for (let j = i + 1; j < lines.length && j < i + 50; j++) {
+                                    if (lines[j] && lines[j].trim() !== '') {
+                                        // Stop if we hit another prompt or command
+                                        if (lines[j].startsWith('$') || lines[j].includes('sudo')) {
+                                            break;
+                                        }
+                                        menuContent.push(lines[j]);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+
+                        // If no menu header found, look for version lists
+                        if (!foundMenu) {
+                            for (let i = lines.length - 1; i >= Math.max(0, lines.length - 100); i--) {
+                                if (lines[i].match(/^\s*v?\d+\.\d+/)) {
+                                    // Found version numbers, extract the menu
+                                    foundMenu = true;
+
+                                    // Find where this version list starts
+                                    let menuStart = i;
+                                    for (let j = i - 1; j >= Math.max(0, i - 30); j--) {
+                                        if (!lines[j].match(/^\s*v?\d+\.\d+/) &&
+                                            !lines[j].includes('\x1b[') &&
+                                            lines[j].trim() !== '') {
+                                            menuStart = j + 1;
+                                            break;
+                                        }
+                                    }
+
+                                    // Get the menu header if present
+                                    if (menuStart > 0) {
+                                        for (let k = menuStart - 3; k < menuStart; k++) {
+                                            if (k >= 0 && lines[k] &&
+                                                (lines[k].includes('Which version') ||
+                                                 lines[k].includes('What version') ||
+                                                 lines[k].includes('Use arrow keys'))) {
+                                                menuContent.push(lines[k]);
+                                            }
+                                        }
+                                    }
+
+                                    // Get all version entries
+                                    for (let j = menuStart; j < lines.length && j < menuStart + 50; j++) {
+                                        if (lines[j] && (lines[j].match(/^\s*v?\d+\.\d+/) ||
+                                                        lines[j].includes('\x1b['))) {
+                                            menuContent.push(lines[j]);
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (foundMenu && menuContent.length > 0) {
+                            // Clear and show only the current menu
+                            terminal.innerHTML = '';
+
+                            // Add command line
+                            const cmdLine = data.output.includes('satellite-update') ?
+                                          '$ sudo satellite-update\n' :
+                                          '$ sudo companion-update\n';
+                            appendToTerminal(cmdLine);
+
+                            // Add the menu content
+                            appendToTerminal(menuContent.join('\n'));
+
+                            lastMenuContent = menuContent.join('\n');
+                        } else if (lastMenuContent) {
+                            // If we can't parse the menu, show the last known good menu
+                            terminal.innerHTML = '';
+                            const cmdLine = data.output.includes('satellite-update') ?
+                                          '$ sudo satellite-update\n' :
+                                          '$ sudo companion-update\n';
+                            appendToTerminal(cmdLine);
+                            appendToTerminal(lastMenuContent);
+                        }
+                    } else {
+                        // Not in menu mode, show incremental updates
+                        lastMenuContent = ''; // Clear menu cache
+                        if (data.output.length > lastOutputLength) {
+                            const newOutput = data.output.substring(lastOutputLength);
+                            appendToTerminal(newOutput);
+                            lastOutputLength = data.output.length;
+                        }
+                    }
+                }
+
+                // Update status
+                if (data.running) {
+                    $('#terminal-status').removeClass('bg-danger').addClass('bg-success').text('Running');
+                } else {
+                    $('#terminal-status').removeClass('bg-success').addClass('bg-warning').text('Stopped');
+                    isRunning = false;
+                    lastOutputLength = 0;
+                    if (updateInterval) {
+                        clearInterval(updateInterval);
+                        updateInterval = null;
+                    }
+                }
+            },
+            error: function() {
+                $('#terminal-status').removeClass('bg-success').addClass('bg-danger').text('Error');
+            }
+        });
+    }
+
+    // Start terminal command
+    function startCommand(command) {
+        $.ajax({
+            url: '/api/terminal/start',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({command: command}),
+            success: function(data) {
+                if (data.success) {
+                    isRunning = true;
+                    $('#terminal-status').removeClass('bg-danger').addClass('bg-success').text('Running');
+
+                    // Start polling for output
+                    if (updateInterval) clearInterval(updateInterval);
+                    updateInterval = setInterval(getOutput, 500);
+                } else {
+                    showToast('Error', 'Failed to start command: ' + (data.error || 'Unknown error'), 'danger');
+                }
+            },
+            error: function() {
+                showToast('Error', 'Failed to start terminal', 'danger');
+            }
+        });
+    }
+
+    // Start Companion update
+    function startCompanionUpdate() {
+        clearTerminal();
+        appendToTerminal('Starting Companion update...\n', 'terminal-success');
+        lastOutputLength = 0;
+        startCommand('sudo companion-update');
+    }
+
+    // Start Satellite update
+    function startSatelliteUpdate() {
+        clearTerminal();
+        appendToTerminal('Starting Satellite update...\n', 'terminal-success');
+        lastOutputLength = 0;
+        startCommand('sudo satellite-update');
+    }
+
+    // Send input text
+    function sendInput() {
+        const input = document.getElementById('terminal-input');
+        if (input.value.trim() && isRunning) {
+            $.ajax({
+                url: '/api/terminal/input',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({text: input.value}),
+                success: function(data) {
+                    if (data.success) {
+                        appendToTerminal('> ' + input.value + '\n', 'terminal-prompt');
+                        input.value = '';
+                    }
+                },
+                error: function() {
+                    showToast('Error', 'Failed to send input', 'danger');
+                }
+            });
+        }
+    }
+
+    // Send special key
+    function sendKey(key) {
+        if (!isRunning) {
+            showToast('Info', 'No active terminal session', 'info');
+            return;
+        }
+
+        $.ajax({
+            url: '/api/terminal/key',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({key: key}),
+            success: function(data) {
+                if (!data.success) {
+                    showToast('Error', 'Failed to send key', 'danger');
+                }
+            },
+            error: function() {
+                showToast('Error', 'Failed to send key', 'danger');
+            }
+        });
+    }
+
+    // Handle key press in input field
+    function handleKeyPress(event) {
+        if (event.key === 'Enter') {
+            sendInput();
+        }
+    }
+
+    // Initialize on page load
+    $(document).ready(function() {
+        appendToTerminal('Terminal ready. Click "Update Companion" or "Update Satellite" to begin.\n', 'terminal-success');
+
+        // Add keyboard shortcuts
+        $(document).keydown(function(e) {
+            // Only if not typing in input field
+            if ($('#terminal-input').is(':focus')) return;
+
+            if (isRunning) {
+                switch(e.which) {
+                    case 38: // Arrow up
+                        sendKey('up');
+                        e.preventDefault();
+                        break;
+                    case 40: // Arrow down
+                        sendKey('down');
+                        e.preventDefault();
+                        break;
+                    case 13: // Enter
+                        sendKey('enter');
+                        e.preventDefault();
+                        break;
+                    case 27: // Escape
+                        sendKey('ctrl-c');
+                        e.preventDefault();
+                        break;
+                }
+            }
+        });
+    });
+
+    // Clean up on page unload
+    $(window).on('beforeunload', function() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+    });
+</script>
+{% endblock %}

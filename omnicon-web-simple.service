@@ -1,0 +1,31 @@
+[Unit]
+Description=Omnicon Simple Web GUI - Remote Control
+After=network.target omnicon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omnicon
+Group=omnicon
+WorkingDirectory=/home/omnicon/OLED_Stats
+
+# Run the simple web GUI
+ExecStart=/usr/bin/python3 -u /home/omnicon/OLED_Stats/omnicon_web_simple.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Output
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/usr/bin:/usr/local/bin"
+
+# No sudo required - just reads/writes files
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

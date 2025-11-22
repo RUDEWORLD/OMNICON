@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.0.0
-# 11/17/2024
+# V4.0.4
+# 11/21/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -20,6 +20,7 @@ import threading
 from datetime import datetime
 import os
 import sys
+import locale
 import psutil  # Added for accurate CPU usage
 import requests
 import re
@@ -27,6 +28,40 @@ import socket
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
+
+# Helper function to get system time with fresh timezone
+def get_system_time():
+    """Get the current system time, forcing a fresh read of timezone info"""
+    try:
+        # Force timezone reload by resetting the environment
+        if 'TZ' in os.environ:
+            del os.environ['TZ']
+        time.tzset()
+
+        # Use subprocess to get the actual system time
+        result = subprocess.run(['date', '+%Y-%m-%d %H:%M:%S %z'],
+                              capture_output=True, text=True, check=True)
+        date_str = result.stdout.strip()
+
+        # Parse the date string and create a datetime object
+        # Format: YYYY-MM-DD HH:MM:SS +ZZZZ
+        parts = date_str.split()
+        date_part = parts[0]
+        time_part = parts[1]
+
+        # Create a datetime from the parsed values
+        year, month, day = map(int, date_part.split('-'))
+        hour, minute, second = map(int, time_part.split(':'))
+
+        # Return a datetime-like object with strftime method
+        from datetime import datetime as dt
+        return dt(year, month, day, hour, minute, second)
+    except Exception as e:
+        logging.warning(f"Failed to get system time via subprocess: {e}")
+        # Fallback to regular datetime but try to reload timezone
+        time.tzset()
+        from datetime import datetime as dt
+        return dt.now()
 
 # GPIO setup
 BUTTON_K1 = 26  # Using GPIO pin 26
@@ -467,7 +502,7 @@ def update_oled_display():
 
         if menu_state == "default":
             current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
-            current_time_str = datetime.now().strftime(current_time_format)
+            current_time_str = get_system_time().strftime(current_time_format)
             # Shell scripts for system monitoring
             cmd = "hostname -I | cut -d\' \' -f1"
             IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
@@ -574,7 +609,7 @@ def update_oled_display():
 
         elif menu_state == "show_pi_health":
             temp, voltage, watt_input, cpu, memory = get_pi_health()
-            current_datetime = datetime.now().strftime("%m/%d/%y  %H:%M" if time_format_24hr else "%m/%d/%y  %I:%M %p")
+            current_datetime = get_system_time().strftime("%m/%d/%y  %H:%M" if time_format_24hr else "%m/%d/%y  %I:%M %p")
             local_draw.text((0, 0), f" {current_datetime}", font=font12, fill=255)
             local_draw.text((12, 16), f"RAM: {memory}", font=font11, fill=255)
             local_draw.text((11, 32), f"V: {voltage}   W: {watt_input:.2f}", font=font11, fill=255)
@@ -621,7 +656,7 @@ def update_oled_display():
             local_draw.text((0, 48), "APPLY :    1 SECOND  ▶", font=font11, fill=255)
 
         elif menu_state == "set_datetime":
-            current_datetime = datetime.now().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
+            current_datetime = get_system_time().strftime("%m/%d/%y   %H:%M" if time_format_24hr else "%m/%d/%y   %I:%M %p")
             local_draw.text((0, 0), f"{current_datetime}", font=font12, fill=255)
             local_draw.text((0, 16), "SET DATE", font=font12, fill=255)
             local_draw.text((0, 32), "SET TIME", font=font12, fill=255)
@@ -766,14 +801,15 @@ def update_oled_display():
         logging.debug("OLED display updated")
 
 def reset_to_main():
-    global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp
+    global menu_state, ip_address, subnet_mask, gateway, timeout_flag, datetime_temp, ip_octet
     if not timeout_flag:
         logging.debug("Timeout: Resetting to main display")
         menu_state = "default"
         ip_address = original_ip_address[:]
         subnet_mask = original_subnet_mask[:]
         gateway = original_gateway[:]
-        datetime_temp = datetime.now()
+        datetime_temp = get_system_time()
+        ip_octet = 0  # Reset IP octet position
         update_oled_display()
         timeout_flag = True
 
@@ -832,16 +868,19 @@ def button_k2_pressed():
         logging.debug("Switching from default to main menu via K2")
         menu_state = "main"
         menu_selection = 0
-    elif menu_state == "set_static_ip":
-        ip_address[ip_octet] = (ip_address[ip_octet] - 1) % 256
-    elif menu_state == "set_static_sm":
-        subnet_mask[ip_octet] = (subnet_mask[ip_octet] - 1) % 256
-    elif menu_state == "set_static_gw":
-        gateway[ip_octet] = (gateway[ip_octet] - 1) % 256
-    elif menu_state == "set_date":
-        update_date(-1)
-    elif menu_state == "set_time":
-        update_time(-1)
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
+        # Handle special editing screens
+        if menu_state == "set_static_ip":
+            ip_address[ip_octet] = (ip_address[ip_octet] - 1) % 256
+        elif menu_state == "set_static_sm":
+            subnet_mask[ip_octet] = (subnet_mask[ip_octet] - 1) % 256
+        elif menu_state == "set_static_gw":
+            gateway[ip_octet] = (gateway[ip_octet] - 1) % 256
+        elif menu_state == "set_date":
+            update_date(-1)
+        elif menu_state == "set_time":
+            update_time(-1)
+        # Don't call activate_menu_item for these special editing screens
     elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Do nothing on short press
         pass
@@ -867,12 +906,14 @@ def button_k3_pressed():
         menu_selection = 0
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
-    if menu_state in ["update_confirm", "downgrade_confirm"]:
+        # Don't call activate_menu_item for these special editing screens
+    elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Cancel action
         menu_state = "update"
         selected_version = None  # Reset selected_version
-        update_oled_display()
+        # Don't call activate_menu_item here
     else:
+        # Only call activate_menu_item for normal menus with selectable options
         menu_selection = 2
         activate_menu_item()
     update_oled_display()
@@ -881,14 +922,16 @@ def button_k3_pressed():
 def button_k4_pressed():
     global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway
     global original_ip_address, original_subnet_mask, original_gateway
-    global datetime_temp, last_interaction_time, time_format_24hr, selected_version
+    global datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
     logging.debug("K4 pressed")
     last_interaction_time = time.time()
+    timeout_flag = False  # Reset timeout flag
 
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
         ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
+        # Don't call activate_menu_item for these special editing screens
     elif menu_state == "update_confirm":
         if selected_version:
             result = perform_update(selected_version)
@@ -913,9 +956,10 @@ def button_k4_pressed():
     update_oled_display()
     
 def hold_k3():
-    global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version
+    global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version, timeout_flag
     logging.debug("K3 held for 1 seconds")
     last_interaction_time = time.time()
+    timeout_flag = False  # Reset timeout flag to ensure buttons remain responsive
 
     if menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
         ip_address = original_ip_address[:]
@@ -924,12 +968,14 @@ def hold_k3():
         menu_state = "set_static"
     elif menu_state in ["set_date", "set_time"]:
         menu_state = "set_datetime"
+    update_oled_display()  # Ensure display updates after state change
 
 
 def hold_k4():
-    global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version
+    global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
     logging.debug("K4 held for 1 seconds")
     last_interaction_time = time.time()
+    timeout_flag = False  # Reset timeout flag to ensure buttons remain responsive
 
     if menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
         save_static_settings()
@@ -938,13 +984,17 @@ def hold_k4():
         original_subnet_mask = subnet_mask[:]
         original_gateway = gateway[:]
         menu_state = "set_static"
+        update_oled_display()  # Ensure display updates after state change
     elif menu_state in ["set_date", "set_time"]:
         set_system_datetime(datetime_temp)
         state = load_state()
         state["time_format_24hr"] = time_format_24hr
         save_state(state)
         update_clock_format(time_format_24hr)
-        restart_script()
+        # Go back to the main menu after setting date/time
+        menu_state = "default"
+        menu_selection = 0
+        update_oled_display()
 
 
 def save_static_settings():
@@ -987,27 +1037,61 @@ def update_time(increment):
         if ip_octet == 0:
             time_format_24hr = not time_format_24hr
         elif ip_octet == 1:
-            new_hour = (datetime_temp.hour + increment) % (24 if time_format_24hr else 12)
-            if new_hour == 0 and not time_format_24hr:
-                new_hour = 12
+            if time_format_24hr:
+                # 24-hour format: Simply increment/decrement hour
+                new_hour = (datetime_temp.hour + increment) % 24
+            else:
+                # 12-hour format: Handle hours 1-12
+                current_hour = datetime_temp.hour
+                is_pm = current_hour >= 12
+                display_hour = current_hour % 12
+                if display_hour == 0:
+                    display_hour = 12
+
+                # Increment/decrement the display hour
+                display_hour = display_hour + increment
+                if display_hour > 12:
+                    display_hour = 1
+                elif display_hour < 1:
+                    display_hour = 12
+
+                # Convert back to 24-hour format
+                if is_pm:
+                    new_hour = display_hour % 12 + 12
+                else:
+                    new_hour = display_hour % 12
+
             datetime_temp = datetime_temp.replace(hour=new_hour)
         elif ip_octet == 2:
             new_minute = (datetime_temp.minute + increment) % 60
             datetime_temp = datetime_temp.replace(minute=new_minute)
         elif ip_octet == 3 and not time_format_24hr:
-            am_pm = datetime_temp.strftime("%p")
-            if am_pm == "AM":
-                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour + 12) % 24)
+            # Toggle AM/PM
+            current_hour = datetime_temp.hour
+            if current_hour >= 12:
+                # PM to AM
+                new_hour = current_hour - 12
             else:
-                datetime_temp = datetime_temp.replace(hour=(datetime_temp.hour - 12) % 24)
+                # AM to PM
+                new_hour = current_hour + 12
+            datetime_temp = datetime_temp.replace(hour=new_hour)
     except ValueError as e:
         logging.error(f"Error updating time: {e}")
 
 def set_system_datetime(datetime_temp):
-    date_str = datetime_temp.strftime("%Y-%m-%d")
-    time_str = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M %p")
-    execute_command(f"sudo date --set='{date_str}'")
-    execute_command(f"sudo date --set='{time_str}'")
+    # Format the full datetime string in a format that 'date' command understands
+    # Use 24-hour format for the system command regardless of display preference
+    datetime_str = datetime_temp.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Set the system date and time in one command
+    cmd = f"sudo date --set='{datetime_str}'"
+    result = execute_command(cmd)
+
+    # Also sync the hardware clock
+    execute_command("sudo hwclock --systohc")
+
+    logging.info(f"System datetime set to: {datetime_str}")
+    return result
 
 def restart_script():
     """Restarts the current script."""
@@ -1127,15 +1211,663 @@ def perform_downgrade(version):
 def update_oled():
     while True:
         # Wait for the start of the next second
-        now = datetime.now()
+        now = get_system_time()
         sleep_time = 1 - now.microsecond / 1_000_000
         time.sleep(sleep_time)
         update_oled_display()
 
+
+
+# Web command processor for remote control
+web_command_file = "web_command.json"
+trigger_file = "trigger_command"
+web_command_queue = []
+web_command_lock = threading.Lock()
+
+def process_web_commands():
+    """Process commands from the web GUI - Non-blocking version"""
+    global web_command_queue
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                try:
+                    os.remove(trigger_file)  # Remove trigger
+                except:
+                    pass
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    try:
+                        with open(web_command_file, 'r') as f:
+                            cmd_data = json.load(f)
+
+                        # Add command to queue instead of processing immediately
+                        with web_command_lock:
+                            web_command_queue.append(cmd_data)
+
+                        logging.info(f"Queued web command: {cmd_data.get('command')}")
+
+                        # Remove command file after reading
+                        os.remove(web_command_file)
+                    except Exception as e:
+                        logging.error(f"Error reading web command: {e}")
+
+        except Exception as e:
+            logging.error(f"Error in web command processor: {e}")
+
+        # Check more frequently but don't block
+        time.sleep(0.2)
+
+def execute_web_commands():
+    """Execute queued web commands without blocking the OLED"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway
+    global time_format_24hr, last_interaction_time, web_command_queue
+
+    if not web_command_queue:
+        return
+
+    # Process one command at a time
+    with web_command_lock:
+        if web_command_queue:
+            cmd_data = web_command_queue.pop(0)
+        else:
+            return
+
+    try:
+        command = cmd_data.get('command')
+        params = cmd_data.get('params', {})
+
+        logging.info(f"Executing web command: {command}")
+
+        # Reset interaction time to prevent timeout
+        last_interaction_time = time.time()
+
+        # Process different commands
+        if command == 'toggle_service':
+            service = params.get('service')
+            if service in ['companion', 'satellite']:
+                # Don't call toggle_service directly, just set the state
+                menu_state = "default"
+                # Schedule the service toggle
+                threading.Thread(target=lambda: toggle_service(service), daemon=True).start()
+                logging.info(f"Service toggle to {service} scheduled")
+
+        elif command == 'toggle_network':
+            network = params.get('network')
+            if network in ['DHCP', 'STATIC']:
+                # Don't block, run in background
+                menu_state = "default"
+                threading.Thread(target=lambda: toggle_network(network), daemon=True).start()
+                logging.info(f"Network toggle to {network} scheduled")
+
+        elif command == 'set_static_ip':
+            # Parse IP settings
+            ip_str = params.get('ip', '192.168.0.100')
+            subnet_str = params.get('subnet', '255.255.255.0')
+            gateway_str = params.get('gateway', '192.168.0.1')
+
+            # Convert to lists
+            ip_address = [int(x) for x in ip_str.split('.')]
+            subnet_mask = [int(x) for x in subnet_str.split('.')]
+            gateway = [int(x) for x in gateway_str.split('.')]
+
+            # Run in background to avoid blocking
+            def apply_settings():
+                save_static_settings()
+                apply_static_settings()
+                logging.info("Applied static IP settings via web")
+
+            threading.Thread(target=apply_settings, daemon=True).start()
+
+        elif command == 'power':
+            action = params.get('action')
+            if action == 'reboot':
+                logging.info("Rebooting system via web command")
+                turn_off_oled()
+                execute_command("sudo reboot")
+            elif action == 'shutdown':
+                logging.info("Shutting down system via web command")
+                turn_off_oled()
+                execute_command("sudo shutdown now")
+
+        elif command == 'button_press':
+            button = params.get('button')
+            logging.info(f"Simulating {button} press via web")
+
+            # Simulate button press without blocking
+            if button == 'K1':
+                button_k1_pressed()
+            elif button == 'K2':
+                button_k2_pressed()
+            elif button == 'K3':
+                button_k3_pressed()
+            elif button == 'K4':
+                button_k4_pressed()
+
+        elif command == 'set_datetime':
+            # Handle date/time setting in background
+            def set_dt():
+                if 'date' in params and 'time' in params:
+                    datetime_str = f"{params['date']} {params['time']}"
+                    execute_command(f"sudo timedatectl set-ntp false")
+                    execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                    logging.info(f"Set date/time to {datetime_str} via web")
+
+                if 'format_24hr' in params:
+                    global time_format_24hr
+                    time_format_24hr = params['format_24hr']
+                    state = load_state()
+                    state['time_format_24hr'] = time_format_24hr
+                    save_state(state)
+                    update_clock_format(time_format_24hr)
+
+            threading.Thread(target=set_dt, daemon=True).start()
+
+    except Exception as e:
+        logging.error(f"Error executing web command: {e}")
+
+
+def process_web_commands():
+    """Process commands from the web GUI - Non-blocking version"""
+    global web_command_queue
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                try:
+                    os.remove(trigger_file)  # Remove trigger
+                except:
+                    pass
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    try:
+                        with open(web_command_file, 'r') as f:
+                            cmd_data = json.load(f)
+
+                        # Add command to queue instead of processing immediately
+                        with web_command_lock:
+                            web_command_queue.append(cmd_data)
+
+                        logging.info(f"Queued web command: {cmd_data.get('command')}")
+
+                        # Remove command file after reading
+                        os.remove(web_command_file)
+                    except Exception as e:
+                        logging.error(f"Error reading web command: {e}")
+
+        except Exception as e:
+            logging.error(f"Error in web command processor: {e}")
+
+        # Check more frequently but don't block
+        time.sleep(0.2)
+
+def execute_web_commands():
+    """Execute queued web commands without blocking the OLED"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway
+    global time_format_24hr, last_interaction_time, web_command_queue
+
+    if not web_command_queue:
+        return
+
+    # Process one command at a time
+    with web_command_lock:
+        if web_command_queue:
+            cmd_data = web_command_queue.pop(0)
+        else:
+            return
+
+    try:
+        command = cmd_data.get('command')
+        params = cmd_data.get('params', {})
+
+        logging.info(f"Executing web command: {command}")
+
+        # Reset interaction time to prevent timeout
+        last_interaction_time = time.time()
+
+        # Process different commands
+        if command == 'toggle_service':
+            service = params.get('service')
+            if service in ['companion', 'satellite']:
+                # Don't call toggle_service directly, just set the state
+                menu_state = "default"
+                # Schedule the service toggle
+                threading.Thread(target=lambda: toggle_service(service), daemon=True).start()
+                logging.info(f"Service toggle to {service} scheduled")
+
+        elif command == 'toggle_network':
+            network = params.get('network')
+            if network in ['DHCP', 'STATIC']:
+                # Don't block, run in background
+                menu_state = "default"
+                threading.Thread(target=lambda: toggle_network(network), daemon=True).start()
+                logging.info(f"Network toggle to {network} scheduled")
+
+        elif command == 'set_static_ip':
+            # Parse IP settings
+            ip_str = params.get('ip', '192.168.0.100')
+            subnet_str = params.get('subnet', '255.255.255.0')
+            gateway_str = params.get('gateway', '192.168.0.1')
+
+            # Convert to lists
+            ip_address = [int(x) for x in ip_str.split('.')]
+            subnet_mask = [int(x) for x in subnet_str.split('.')]
+            gateway = [int(x) for x in gateway_str.split('.')]
+
+            # Run in background to avoid blocking
+            def apply_settings():
+                save_static_settings()
+                apply_static_settings()
+                logging.info("Applied static IP settings via web")
+
+            threading.Thread(target=apply_settings, daemon=True).start()
+
+        elif command == 'power':
+            action = params.get('action')
+            if action == 'reboot':
+                logging.info("Rebooting system via web command")
+                turn_off_oled()
+                execute_command("sudo reboot")
+            elif action == 'shutdown':
+                logging.info("Shutting down system via web command")
+                turn_off_oled()
+                execute_command("sudo shutdown now")
+
+        elif command == 'button_press':
+            button = params.get('button')
+            logging.info(f"Simulating {button} press via web")
+
+            # Simulate button press without blocking
+            if button == 'K1':
+                button_k1_pressed()
+            elif button == 'K2':
+                button_k2_pressed()
+            elif button == 'K3':
+                button_k3_pressed()
+            elif button == 'K4':
+                button_k4_pressed()
+
+        elif command == 'set_datetime':
+            # Handle date/time setting in background
+            def set_dt():
+                if 'date' in params and 'time' in params:
+                    datetime_str = f"{params['date']} {params['time']}"
+                    execute_command(f"sudo timedatectl set-ntp false")
+                    execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                    logging.info(f"Set date/time to {datetime_str} via web")
+
+                if 'format_24hr' in params:
+                    global time_format_24hr
+                    time_format_24hr = params['format_24hr']
+                    state = load_state()
+                    state['time_format_24hr'] = time_format_24hr
+                    save_state(state)
+                    update_clock_format(time_format_24hr)
+
+            threading.Thread(target=set_dt, daemon=True).start()
+
+    except Exception as e:
+        logging.error(f"Error executing web command: {e}")
+
+
+def process_web_commands():
+    """Process commands from the web GUI"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                os.remove(trigger_file)  # Remove trigger
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    with open(web_command_file, 'r') as f:
+                        cmd_data = json.load(f)
+
+                    command = cmd_data.get('command')
+                    params = cmd_data.get('params', {})
+
+                    logging.info(f"Processing web command: {command}")
+
+                    # Process different commands
+                    if command == 'toggle_service':
+                        service = params.get('service')
+                        if service in ['companion', 'satellite']:
+                            toggle_service(service)
+                            logging.info(f"Toggled to {service} via web")
+
+                    elif command == 'toggle_network':
+                        network = params.get('network')
+                        if network in ['DHCP', 'STATIC']:
+                            toggle_network(network)
+                            logging.info(f"Toggled to {network} via web")
+
+                    elif command == 'set_static_ip':
+                        # Parse IP settings
+                        ip_str = params.get('ip', '192.168.0.100')
+                        subnet_str = params.get('subnet', '255.255.255.0')
+                        gateway_str = params.get('gateway', '192.168.0.1')
+
+                        # Convert to lists
+                        ip_address = [int(x) for x in ip_str.split('.')]
+                        subnet_mask = [int(x) for x in subnet_str.split('.')]
+                        gateway = [int(x) for x in gateway_str.split('.')]
+
+                        save_static_settings()
+                        apply_static_settings()
+                        logging.info("Applied static IP settings via web")
+
+                    elif command == 'power':
+                        action = params.get('action')
+                        if action == 'reboot':
+                            logging.info("Rebooting system via web command")
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        elif action == 'shutdown':
+                            logging.info("Shutting down system via web command")
+                            turn_off_oled()
+                            execute_command("sudo shutdown now")
+
+                    elif command == 'button_press':
+                        button = params.get('button')
+                        logging.info(f"Simulating {button} press via web")
+                        # Reset interaction time to prevent timeout
+                        global last_interaction_time
+                        last_interaction_time = time.time()
+
+                        # Simulate button press
+                        if button == 'K1':
+                            button_k1_pressed()
+                        elif button == 'K2':
+                            button_k2_pressed()
+                        elif button == 'K3':
+                            button_k3_pressed()
+                        elif button == 'K4':
+                            button_k4_pressed()
+
+                        # Force display update
+                        update_oled_display()
+
+                    elif command == 'set_datetime':
+                        # Handle date/time setting
+                        if 'date' in params and 'time' in params:
+                            datetime_str = f"{params['date']} {params['time']}"
+                            execute_command(f"sudo timedatectl set-ntp false")
+                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                            logging.info(f"Set date/time to {datetime_str} via web")
+
+                        if 'format_24hr' in params:
+                            time_format_24hr = params['format_24hr']
+                            state = load_state()
+                            state['time_format_24hr'] = time_format_24hr
+                            save_state(state)
+                            update_clock_format(time_format_24hr)
+                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
+
+                    elif command == 'menu_navigate':
+                        # Direct menu navigation
+                        target_menu = params.get('menu')
+                        if target_menu:
+                            menu_state = target_menu
+                            menu_selection = 0
+                            update_oled_display()
+                            logging.info(f"Navigated to {target_menu} menu via web")
+
+                    # Remove command file after processing
+                    os.remove(web_command_file)
+
+        except Exception as e:
+            logging.error(f"Error processing web command: {e}")
+
+        # Check every 0.5 seconds for new commands
+        time.sleep(0.5)
+
+
+# Web command processor for remote control
+web_command_file = "web_command.json"
+trigger_file = "trigger_command"
+
+def process_web_commands():
+    """Process commands from the web GUI"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                os.remove(trigger_file)  # Remove trigger
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    with open(web_command_file, 'r') as f:
+                        cmd_data = json.load(f)
+
+                    command = cmd_data.get('command')
+                    params = cmd_data.get('params', {})
+
+                    logging.info(f"Processing web command: {command}")
+
+                    # Process different commands
+                    if command == 'toggle_service':
+                        service = params.get('service')
+                        if service in ['companion', 'satellite']:
+                            toggle_service(service)
+                            logging.info(f"Toggled to {service} via web")
+
+                    elif command == 'toggle_network':
+                        network = params.get('network')
+                        if network in ['DHCP', 'STATIC']:
+                            toggle_network(network)
+                            logging.info(f"Toggled to {network} via web")
+
+                    elif command == 'set_static_ip':
+                        # Parse IP settings
+                        ip_str = params.get('ip', '192.168.0.100')
+                        subnet_str = params.get('subnet', '255.255.255.0')
+                        gateway_str = params.get('gateway', '192.168.0.1')
+
+                        # Convert to lists
+                        ip_address = [int(x) for x in ip_str.split('.')]
+                        subnet_mask = [int(x) for x in subnet_str.split('.')]
+                        gateway = [int(x) for x in gateway_str.split('.')]
+
+                        save_static_settings()
+                        apply_static_settings()
+                        logging.info("Applied static IP settings via web")
+
+                    elif command == 'power':
+                        action = params.get('action')
+                        if action == 'reboot':
+                            logging.info("Rebooting system via web command")
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        elif action == 'shutdown':
+                            logging.info("Shutting down system via web command")
+                            turn_off_oled()
+                            execute_command("sudo shutdown now")
+
+                    elif command == 'button_press':
+                        button = params.get('button')
+                        logging.info(f"Simulating {button} press via web")
+                        # Reset interaction time to prevent timeout
+                        global last_interaction_time
+                        last_interaction_time = time.time()
+
+                        # Simulate button press
+                        if button == 'K1':
+                            button_k1_pressed()
+                        elif button == 'K2':
+                            button_k2_pressed()
+                        elif button == 'K3':
+                            button_k3_pressed()
+                        elif button == 'K4':
+                            button_k4_pressed()
+
+                        # Force display update
+                        update_oled_display()
+
+                    elif command == 'set_datetime':
+                        # Handle date/time setting
+                        if 'date' in params and 'time' in params:
+                            datetime_str = f"{params['date']} {params['time']}"
+                            execute_command(f"sudo timedatectl set-ntp false")
+                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                            logging.info(f"Set date/time to {datetime_str} via web")
+
+                        if 'format_24hr' in params:
+                            time_format_24hr = params['format_24hr']
+                            state = load_state()
+                            state['time_format_24hr'] = time_format_24hr
+                            save_state(state)
+                            update_clock_format(time_format_24hr)
+                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
+
+                    elif command == 'menu_navigate':
+                        # Direct menu navigation
+                        target_menu = params.get('menu')
+                        if target_menu:
+                            menu_state = target_menu
+                            menu_selection = 0
+                            update_oled_display()
+                            logging.info(f"Navigated to {target_menu} menu via web")
+
+                    # Remove command file after processing
+                    os.remove(web_command_file)
+
+        except Exception as e:
+            logging.error(f"Error processing web command: {e}")
+
+        # Check every 0.5 seconds for new commands
+        time.sleep(0.5)
+
+
+# Web command processor for remote control
+web_command_file = "web_command.json"
+trigger_file = "trigger_command"
+
+def process_web_commands():
+    """Process commands from the web GUI"""
+    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
+
+    while True:
+        try:
+            # Check if there's a trigger file
+            if os.path.exists(trigger_file):
+                os.remove(trigger_file)  # Remove trigger
+
+                # Check for command file
+                if os.path.exists(web_command_file):
+                    with open(web_command_file, 'r') as f:
+                        cmd_data = json.load(f)
+
+                    command = cmd_data.get('command')
+                    params = cmd_data.get('params', {})
+
+                    logging.info(f"Processing web command: {command}")
+
+                    # Process different commands
+                    if command == 'toggle_service':
+                        service = params.get('service')
+                        if service in ['companion', 'satellite']:
+                            toggle_service(service)
+                            logging.info(f"Toggled to {service} via web")
+
+                    elif command == 'toggle_network':
+                        network = params.get('network')
+                        if network in ['DHCP', 'STATIC']:
+                            toggle_network(network)
+                            logging.info(f"Toggled to {network} via web")
+
+                    elif command == 'set_static_ip':
+                        # Parse IP settings
+                        ip_str = params.get('ip', '192.168.0.100')
+                        subnet_str = params.get('subnet', '255.255.255.0')
+                        gateway_str = params.get('gateway', '192.168.0.1')
+
+                        # Convert to lists
+                        ip_address = [int(x) for x in ip_str.split('.')]
+                        subnet_mask = [int(x) for x in subnet_str.split('.')]
+                        gateway = [int(x) for x in gateway_str.split('.')]
+
+                        save_static_settings()
+                        apply_static_settings()
+                        logging.info("Applied static IP settings via web")
+
+                    elif command == 'power':
+                        action = params.get('action')
+                        if action == 'reboot':
+                            logging.info("Rebooting system via web command")
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        elif action == 'shutdown':
+                            logging.info("Shutting down system via web command")
+                            turn_off_oled()
+                            execute_command("sudo shutdown now")
+
+                    elif command == 'button_press':
+                        button = params.get('button')
+                        logging.info(f"Simulating {button} press via web")
+                        # Reset interaction time to prevent timeout
+                        global last_interaction_time
+                        last_interaction_time = time.time()
+
+                        # Simulate button press
+                        if button == 'K1':
+                            button_k1_pressed()
+                        elif button == 'K2':
+                            button_k2_pressed()
+                        elif button == 'K3':
+                            button_k3_pressed()
+                        elif button == 'K4':
+                            button_k4_pressed()
+
+                        # Force display update
+                        update_oled_display()
+
+                    elif command == 'set_datetime':
+                        # Handle date/time setting
+                        if 'date' in params and 'time' in params:
+                            datetime_str = f"{params['date']} {params['time']}"
+                            execute_command(f"sudo timedatectl set-ntp false")
+                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
+                            logging.info(f"Set date/time to {datetime_str} via web")
+
+                        if 'format_24hr' in params:
+                            time_format_24hr = params['format_24hr']
+                            state = load_state()
+                            state['time_format_24hr'] = time_format_24hr
+                            save_state(state)
+                            update_clock_format(time_format_24hr)
+                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
+
+                    elif command == 'menu_navigate':
+                        # Direct menu navigation
+                        target_menu = params.get('menu')
+                        if target_menu:
+                            menu_state = target_menu
+                            menu_selection = 0
+                            update_oled_display()
+                            logging.info(f"Navigated to {target_menu} menu via web")
+
+                    # Remove command file after processing
+                    os.remove(web_command_file)
+
+        except Exception as e:
+            logging.error(f"Error processing web command: {e}")
+
+        # Check every 0.5 seconds for new commands
+        time.sleep(0.5)
+
+
 def main():
     global datetime_temp, time_format_24hr
     initial_setup()
-    datetime_temp = datetime.now()
+    datetime_temp = get_system_time()
 
     state = load_state()
     time_format_24hr = state.get("time_format_24hr", True)
@@ -1154,6 +1886,15 @@ def main():
     update_oled_thread = threading.Thread(target=update_oled)
     update_oled_thread.daemon = True
     update_oled_thread.start()
+    # Start web command processor thread
+    web_command_thread = threading.Thread(target=process_web_commands, daemon=True)
+    web_command_thread.start()
+    logging.info("Web command processor started")
+
+    # Start web command processor thread
+
+    # Start web command processor thread
+
 
     logging.info('Script started successfully')
 
@@ -1162,6 +1903,7 @@ def main():
     timeout_thread.start()
 
     while True:
+        execute_web_commands()
         time.sleep(.1)  # Check every 100ms
 
 def fast_adjust_ip(increment):
@@ -1226,7 +1968,7 @@ def activate_menu_item():
         elif selected_option == "SET DATE/TIME":
             menu_state = "set_datetime"
             menu_selection = 0
-            datetime_temp = datetime.now()
+            datetime_temp = get_system_time()
         elif selected_option == "UPDATE":
             menu_state = "update"
             menu_selection = 0
@@ -1359,7 +2101,7 @@ def activate_menu_item():
                 menu_state = "default"
         elif selected_option == "CURRENT BETA":
             if is_connected():
-                show_message("UPDATING/nSATELLITE", 2)
+                show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
                 updating_application = False

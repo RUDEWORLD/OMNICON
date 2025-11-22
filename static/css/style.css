@@ -1,0 +1,270 @@
+/* Omnicon Web GUI Custom Styles */
+
+:root {
+    --primary-color: #667eea;
+    --secondary-color: #764ba2;
+    --success-color: #28a745;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --info-color: #17a2b8;
+    --dark-color: #343a40;
+}
+
+body {
+    background-color: #f8f9fa;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.navbar {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.card {
+    border: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,.1);
+    transition: transform 0.2s;
+    margin-bottom: 20px;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0,0,0,.15);
+}
+
+.card-header {
+    font-weight: 600;
+    border-bottom: 2px solid rgba(255,255,255,.2);
+}
+
+.btn {
+    border-radius: 5px;
+    transition: all 0.3s ease;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,.15);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+/* Service buttons styling */
+#companionBtn, #satelliteBtn {
+    padding: 20px;
+    font-size: 16px;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+#companionBtn.active, #satelliteBtn.active {
+    background-color: var(--success-color);
+    color: white;
+    border-color: var(--success-color);
+}
+
+#companionBtn i, #satelliteBtn i {
+    font-size: 32px;
+    margin-bottom: 10px;
+}
+
+/* System info styling */
+.system-info-item {
+    padding: 8px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.system-info-item:last-child {
+    border-bottom: none;
+}
+
+.system-info-label {
+    font-weight: 600;
+    display: inline-block;
+    min-width: 120px;
+}
+
+.system-info-value {
+    font-weight: normal;
+}
+
+/* Progress bars */
+.progress {
+    height: 20px;
+    border-radius: 10px;
+    background-color: #e9ecef;
+}
+
+.progress-bar {
+    border-radius: 10px;
+    transition: width 0.6s ease;
+}
+
+/* Status badges */
+.badge {
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-weight: 500;
+}
+
+.badge.bg-success {
+    background-color: var(--success-color) !important;
+}
+
+.badge.bg-danger {
+    background-color: var(--danger-color) !important;
+}
+
+/* Modal styling */
+.modal-content {
+    border-radius: 10px;
+    border: none;
+    box-shadow: 0 5px 20px rgba(0,0,0,.2);
+}
+
+.modal-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    color: white;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+.modal-header .btn-close {
+    filter: brightness(0) invert(1);
+}
+
+/* Toast styling */
+.toast {
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,.15);
+}
+
+.toast-header {
+    background-color: var(--primary-color);
+    color: white;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+/* Network info display */
+.network-info-table {
+    width: 100%;
+}
+
+.network-info-table td {
+    padding: 5px 10px;
+}
+
+.network-info-table td:first-child {
+    font-weight: 600;
+    width: 40%;
+}
+
+/* Loading spinner */
+.spinner-border {
+    width: 3rem;
+    height: 3rem;
+    margin: 20px auto;
+}
+
+/* Version list in update modal */
+.list-group-item {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.list-group-item:hover {
+    background-color: #f8f9fa;
+    transform: translateX(5px);
+}
+
+.list-group-item.active {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .card {
+        margin-bottom: 15px;
+    }
+
+    #companionBtn, #satelliteBtn {
+        padding: 15px;
+        font-size: 14px;
+    }
+
+    #companionBtn i, #satelliteBtn i {
+        font-size: 24px;
+    }
+
+    .system-info-label {
+        min-width: 100px;
+        font-size: 14px;
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #1a1a1a;
+        color: #e9ecef;
+    }
+
+    .card {
+        background-color: #2d2d2d;
+        color: #e9ecef;
+    }
+
+    .modal-content {
+        background-color: #2d2d2d;
+        color: #e9ecef;
+    }
+
+    .form-control, .form-select {
+        background-color: #1a1a1a;
+        color: #e9ecef;
+        border-color: #495057;
+    }
+
+    .btn-outline-primary {
+        color: #8a98ff;
+        border-color: #8a98ff;
+    }
+
+    .btn-outline-primary:hover {
+        background-color: #8a98ff;
+        color: #1a1a1a;
+    }
+}
+
+/* Animation for status updates */
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+}
+
+.updating {
+    animation: pulse 1.5s infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--secondary-color);
+}

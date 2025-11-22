@@ -1,0 +1,13 @@
+# Allow omnicon user to run specific commands without password
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/timedatectl
+omnicon ALL=(ALL) NOPASSWD: /bin/bash -c echo * > /etc/timezone
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart companion
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart satellite
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop companion
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop satellite
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl start companion
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/systemctl start satellite
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/companion-update
+omnicon ALL=(ALL) NOPASSWD: /usr/bin/satellite-update
+omnicon ALL=(ALL) NOPASSWD: /sbin/shutdown
+omnicon ALL=(ALL) NOPASSWD: /sbin/reboot

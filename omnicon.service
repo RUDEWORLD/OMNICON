@@ -1,0 +1,22 @@
+[Unit]
+Description=Omnicon OLED Control Script
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omnicon
+Group=omnicon
+WorkingDirectory=/home/omnicon/OLED_Stats
+ExecStart=/usr/bin/python3 -u /home/omnicon/OLED_Stats/omnicon.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/usr/bin:/usr/local/bin"
+
+[Install]
+WantedBy=multi-user.target

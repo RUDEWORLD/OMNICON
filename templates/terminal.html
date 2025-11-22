@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% block title %}Update Terminal - Omnicon{% endblock %}
+
+{% block extra_css %}
+<style>
+    #terminal {
+        background-color: #000;
+        color: #0f0;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        padding: 20px;
+        height: 500px;
+        overflow-y: auto;
+        border-radius: 5px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+
+    #terminal-input {
+        background-color: #111;
+        color: #0f0;
+        font-family: 'Courier New', monospace;
+        border: 1px solid #0f0;
+        padding: 10px;
+        width: 100%;
+        font-size: 14px;
+    }
+
+    .terminal-line {
+        margin: 2px 0;
+    }
+
+    .terminal-prompt {
+        color: #0ff;
+    }
+
+    .terminal-error {
+        color: #f00;
+    }
+
+    .terminal-success {
+        color: #0f0;
+    }
+
+    .update-buttons {
+        margin: 20px 0;
+    }
+
+    .btn-terminal {
+        margin-right: 10px;
+        margin-bottom: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-terminal"></i> Update Terminal
+                        <span id="terminal-status" class="float-end badge bg-success">Ready</span>
+                    </h5>
+                </div>
+                <div class="card-body bg-dark">
+                    <!-- Quick Launch Buttons -->
+                    <div class="update-buttons">
+                        <button class="btn btn-primary btn-terminal" onclick="startCompanionUpdate()">
+                            <i class="fas fa-satellite-dish"></i> Update Companion
+                        </button>
+                        <button class="btn btn-info btn-terminal" onclick="startSatelliteUpdate()">
+                            <i class="fas fa-satellite"></i> Update Satellite
+                        </button>
+                        <button class="btn btn-warning btn-terminal" onclick="sendCommand('clear')">
+                            <i class="fas fa-broom"></i> Clear
+                        </button>
+                        <button class="btn btn-danger btn-terminal" onclick="sendCtrlC()">
+                            <i class="fas fa-stop"></i> Ctrl+C
+                        </button>
+                        <button class="btn btn-success btn-terminal" onclick="sendEnter()">
+                            <i class="fas fa-arrow-right"></i> Enter
+                        </button>
+                        <button class="btn btn-secondary btn-terminal" onclick="sendArrowUp()">
+                            <i class="fas fa-arrow-up"></i> Up
+                        </button>
+                        <button class="btn btn-secondary btn-terminal" onclick="sendArrowDown()">
+                            <i class="fas fa-arrow-down"></i> Down
+                        </button>
+                    </div>
+
+                    <!-- Terminal Display -->
+                    <div id="terminal"></div>
+
+                    <!-- Input Field -->
+                    <div class="input-group mt-3">
+                        <span class="input-group-text bg-dark text-success">$</span>
+                        <input type="text" id="terminal-input" class="form-control"
+                               placeholder="Type command or use buttons above..."
+                               onkeypress="handleKeyPress(event)">
+                        <button class="btn btn-success" onclick="sendInput()">
+                            <i class="fas fa-paper-plane"></i> Send
+                        </button>
+                    </div>
+
+                    <!-- Help Text -->
+                    <div class="alert alert-info mt-3">
+                        <small>
+                            <strong>Tips:</strong>
+                            <ul class="mb-0">
+                                <li>Use arrow keys to navigate menu options</li>
+                                <li>Press Enter to select an option</li>
+                                <li>Use Ctrl+C button to cancel/exit</li>
+                                <li>For Companion/Satellite updates: Arrow keys select version, Enter confirms</li>
+                            </ul>
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- WebSocket for real-time terminal -->
+<script>
+    let ws = null;
+    let currentProcess = null;
+
+    // Initialize WebSocket connection
+    function initWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/terminal/ws`);
+
+        ws.onopen = function() {
+            console.log('Terminal connected');
+            $('#terminal-status').removeClass('bg-danger').addClass('bg-success').text('Connected');
+            appendToTerminal('Terminal connected. Ready for commands.\n', 'terminal-success');
+        };
+
+        ws.onmessage = function(event) {
+            appendToTerminal(event.data);
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            $('#terminal-status').removeClass('bg-success').addClass('bg-danger').text('Error');
+        };
+
+        ws.onclose = function() {
+            console.log('Terminal disconnected');
+            $('#terminal-status').removeClass('bg-success').addClass('bg-warning').text('Disconnected');
+            // Try to reconnect after 3 seconds
+            setTimeout(initWebSocket, 3000);
+        };
+    }
+
+    // Append text to terminal
+    function appendToTerminal(text, className = '') {
+        const terminal = document.getElementById('terminal');
+        const line = document.createElement('div');
+        line.className = 'terminal-line ' + className;
+        line.textContent = text;
+        terminal.appendChild(line);
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    // Send command to terminal
+    function sendCommand(cmd) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'command',
+                command: cmd
+            }));
+            appendToTerminal('$ ' + cmd, 'terminal-prompt');
+        }
+    }
+
+    // Send input from text field
+    function sendInput() {
+        const input = document.getElementById('terminal-input');
+        if (input.value.trim()) {
+            sendCommand(input.value);
+            input.value = '';
+        }
+    }
+
+    // Handle key press in input field
+    function handleKeyPress(event) {
+        if (event.key === 'Enter') {
+            sendInput();
+        }
+    }
+
+    // Start Companion update
+    function startCompanionUpdate() {
+        appendToTerminal('\nStarting Companion update...', 'terminal-success');
+        sendCommand('sudo companion-update');
+        currentProcess = 'companion';
+    }
+
+    // Start Satellite update
+    function startSatelliteUpdate() {
+        appendToTerminal('\nStarting Satellite update...', 'terminal-success');
+        sendCommand('sudo satellite-update');
+        currentProcess = 'satellite';
+    }
+
+    // Send special keys
+    function sendCtrlC() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'key',
+                key: 'ctrl-c'
+            }));
+        }
+    }
+
+    function sendEnter() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'key',
+                key: 'enter'
+            }));
+        }
+    }
+
+    function sendArrowUp() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'key',
+                key: 'up'
+            }));
+        }
+    }
+
+    function sendArrowDown() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'key',
+                key: 'down'
+            }));
+        }
+    }
+
+    // Initialize on page load
+    $(document).ready(function() {
+        initWebSocket();
+
+        // Add keyboard shortcuts
+        $(document).keydown(function(e) {
+            // Only if not typing in input field
+            if ($('#terminal-input').is(':focus')) return;
+
+            switch(e.which) {
+                case 38: // Arrow up
+                    sendArrowUp();
+                    e.preventDefault();
+                    break;
+                case 40: // Arrow down
+                    sendArrowDown();
+                    e.preventDefault();
+                    break;
+                case 13: // Enter
+                    sendEnter();
+                    e.preventDefault();
+                    break;
+                case 27: // Escape
+                    sendCtrlC();
+                    e.preventDefault();
+                    break;
+            }
+        });
+    });
+</script>
+{% endblock %}
