@@ -25,6 +25,8 @@ import psutil  # Added for accurate CPU usage
 import requests
 import re
 import socket
+import zipfile
+import shutil
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
@@ -1131,18 +1133,63 @@ def update_clock_format(time_format_24hr):
     subprocess.run(['lxpanelctl', 'restart'], check=True)
     logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
 
-def download_file_from_github(tag, local_path):
-    url = f"https://raw.githubusercontent.com/RUDEWORLD/OMNICON/{tag}/omnicon.py"
+def download_and_extract_zip_from_github(tag, extract_to):
+    """Download the entire OMNICON release ZIP and extract it into extract_to."""
+    zip_url = f"https://github.com/RUDEWORLD/OMNICON/archive/refs/tags/{tag}.zip"
+    local_zip = "/tmp/omnicon_update.zip"
+    temp_extract = "/tmp/omnicon_extract"
+
+    # Clean previous temp folders
+    if os.path.exists(local_zip):
+        os.remove(local_zip)
+    if os.path.exists(temp_extract):
+        shutil.rmtree(temp_extract)
+
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        with open(local_path, 'w', encoding='utf-8') as file:  # Ensure UTF-8 encoding is used
-            file.write(response.text)
-        logging.info(f"Downloaded and saved: {local_path}")
-        return True
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to download the script: {e}")
-        return False
+        # Download the ZIP file
+        r = requests.get(zip_url, stream=True)
+        r.raise_for_status()
+
+        with open(local_zip, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        # Extract ZIP
+        with zipfile.ZipFile(local_zip, "r") as zip_ref:
+            zip_ref.extractall(temp_extract)
+
+        # The extracted folder has a name like "OMNICON-4.0.4/"
+        extracted_root = None
+        for name in os.listdir(temp_extract):
+            if os.path.isdir(os.path.join(temp_extract, name)):
+                extracted_root = os.path.join(temp_extract, name)
+                break
+
+        if not extracted_root:
+            return False, "BAD ZIP CONTENTS"
+
+        # Copy everything EXCEPT the user's state.json
+        for root, dirs, files in os.walk(extracted_root):
+            rel_path = os.path.relpath(root, extracted_root)
+            dest_path = os.path.join(extract_to, rel_path)
+
+            if not os.path.exists(dest_path):
+                os.makedirs(dest_path, exist_ok=True)
+
+            for file in files:
+                if file == "state.json":
+                    continue  # Don't overwrite user settings
+
+                src_file = os.path.join(root, file)
+                dst_file = os.path.join(dest_path, file)
+
+                shutil.copy2(src_file, dst_file)
+
+        return True, ""
+    except Exception as e:
+        logging.error(f"Update ZIP download failed: {e}")
+        return False, str(e)
 
 def fetch_github_tags():
     url = "https://api.github.com/repos/RUDEWORLD/OMNICON/tags"
@@ -1175,12 +1222,14 @@ def update_omnicon():
 
 
 def perform_update(version):
-    local_path = "/home/omnicon/OLED_Stats/omnicon.py"
-    if download_file_from_github(version, local_path):
+    extract_path = "/home/omnicon/OLED_Stats"
+
+    ok, err = download_and_extract_zip_from_github(version, extract_path)
+    if ok:
         restart_script()
         return "OMNICON UPDATED"
     else:
-        return "UPDATE FAILED"
+        return f"UPDATE FAILED\n{err}"
 
 def downgrade_omnicon():
     global available_versions, current_version, selected_version
@@ -1200,12 +1249,14 @@ def downgrade_omnicon():
     return "DOWNGRADE AVAILABLE"
 
 def perform_downgrade(version):
-    local_path = "/home/omnicon/OLED_Stats/omnicon.py"
-    if download_file_from_github(version, local_path):
+    extract_path = "/home/omnicon/OLED_Stats"
+
+    ok, err = download_and_extract_zip_from_github(version, extract_path)
+    if ok:
         restart_script()
         return "OMNICON DOWNGRADED"
     else:
-        return "DOWNGRADE FAILED"
+        return f"DOWNGRADE FAILED\n{err}"
 
 # Update OLED display in a separate thread
 def update_oled():
