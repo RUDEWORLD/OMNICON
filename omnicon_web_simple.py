@@ -31,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.1.8"  # Added debug output for GitHub API troubleshooting
+WEB_GUI_VERSION = "4.2.2"  # Added debug output for GitHub API troubleshooting
 
 # Configuration
 STATE_FILE = "state.json"
@@ -942,7 +942,7 @@ def api_check_omnicon_update():
                 'User-Agent': 'Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36'
             },
             {
-                'User-Agent': 'Omnicon-Updater/4.1.6'
+                'User-Agent': 'Omnicon-Updater/4.2.2'
             },
             {}  # Try with no headers as last resort
         ]

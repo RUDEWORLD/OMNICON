@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.1
+# V4.2.2
 # 11/22/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1257,7 +1257,7 @@ def fetch_github_tags():
     # Build headers with authentication if token is available
     base_headers = {
         'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'Omnicon-Updater/4.1.9'
+        'User-Agent': 'Omnicon-Updater/4.2.2'
     }
 
     if github_token:
@@ -1270,7 +1270,7 @@ def fetch_github_tags():
     # Try with full headers first, then fallback options
     headers_options = [
         base_headers,
-        {'User-Agent': 'Omnicon-Updater/4.1.9'},  # Minimal headers
+        {'User-Agent': 'Omnicon-Updater/4.2.2'},  # Minimal headers
         {}  # Try with no headers as last resort
     ]
 
@@ -1326,7 +1326,7 @@ def fetch_github_tags():
     releases_url = "https://api.github.com/repos/RUDEWORLD/OMNICON/releases"
 
     try:
-        headers = base_headers if github_token else {'User-Agent': 'Omnicon-Updater/4.1.9'}
+        headers = base_headers if github_token else {'User-Agent': 'Omnicon-Updater/4.2.2'}
         response = requests.get(releases_url, headers=headers, timeout=15)
         response.raise_for_status()
         releases = response.json()
