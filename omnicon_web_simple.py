@@ -31,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.1.4"  # Added direct Companion/Satellite update buttons, removed terminal dependency
+WEB_GUI_VERSION = "4.1.5"  # Fixed omnicon update to restart services instead of reboot
 
 # Configuration
 STATE_FILE = "state.json"

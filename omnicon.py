@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.1.4
+# V4.1.5
 # 11/22/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1104,16 +1104,11 @@ def restart_script():
 # Wait for the current process to exit
 sleep 3
 
-# Stop both services
-sudo systemctl stop omnicon-web-simple.service
-sudo systemctl stop omnicon.service
+# Restart omnicon service
+sudo systemctl restart omnicon.service
 
-# Wait a moment
-sleep 2
-
-# Start both services with new code
-sudo systemctl start omnicon.service
-sudo systemctl start omnicon-web-simple.service
+# Try both possible web service names (omnicon-web.service or omnicon-web-simple.service)
+sudo systemctl restart omnicon-web.service 2>/dev/null || sudo systemctl restart omnicon-web-simple.service 2>/dev/null
 
 # Remove this temp script
 rm -f /tmp/restart_omnicon.sh
@@ -1270,6 +1265,8 @@ def perform_update(version):
 
     ok, err = download_and_extract_zip_from_github(version, extract_path)
     if ok:
+        # Show message before restarting
+        show_message("RESTARTING\nSERVICES...", 2)
         restart_script()
         return "OMNICON UPDATED"
     else:
@@ -1297,6 +1294,8 @@ def perform_downgrade(version):
 
     ok, err = download_and_extract_zip_from_github(version, extract_path)
     if ok:
+        # Show message before restarting
+        show_message("RESTARTING\nSERVICES...", 2)
         restart_script()
         return "OMNICON DOWNGRADED"
     else:
