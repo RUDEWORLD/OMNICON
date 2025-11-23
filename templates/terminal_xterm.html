@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block title %}Update Terminal - Omnicon{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+<style>
+    #terminal-container {
+        background-color: #000;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 20px 0;
+    }
+
+    #terminal {
+        height: 500px;
+    }
+
+    .update-buttons {
+        margin: 20px 0;
+    }
+
+    .btn-terminal {
+        margin-right: 10px;
+        margin-bottom: 10px;
+    }
+
+    .connection-status {
+        display: inline-block;
+        margin-left: 10px;
+        padding: 5px 10px;
+        border-radius: 3px;
+        font-size: 0.9em;
+    }
+
+    .status-connected {
+        background-color: #28a745;
+        color: white;
+    }
+
+    .status-disconnected {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .status-connecting {
+        background-color: #ffc107;
+        color: black;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-terminal"></i> Update Terminal
+                        <span id="connection-status" class="connection-status status-disconnected">Disconnected</span>
+                    </h5>
+                </div>
+                <div class="card-body bg-dark">
+                    <!-- Quick Launch Buttons -->
+                    <div class="update-buttons">
+                        <button class="btn btn-primary btn-terminal" onclick="startCompanionUpdate()">
+                            <i class="fas fa-satellite-dish"></i> Update Companion
+                        </button>
+                        <button class="btn btn-info btn-terminal" onclick="startSatelliteUpdate()">
+                            <i class="fas fa-satellite"></i> Update Satellite
+                        </button>
+                        <button class="btn btn-warning btn-terminal" onclick="clearTerminal()">
+                            <i class="fas fa-broom"></i> Clear
+                        </button>
+                        <button class="btn btn-danger btn-terminal" onclick="sendCtrlC()">
+                            <i class="fas fa-stop"></i> Stop (Ctrl+C)
+                        </button>
+                        <button class="btn btn-secondary btn-terminal" onclick="reconnectTerminal()">
+                            <i class="fas fa-sync"></i> Reconnect
+                        </button>
+                    </div>
+
+                    <!-- Terminal Display -->
+                    <div id="terminal-container">
+                        <div id="terminal"></div>
+                    </div>
+
+                    <!-- Help Text -->
+                    <div class="alert alert-info">
+                        <small>
+                            <strong>Tips:</strong>
+                            <ul class="mb-0">
+                                <li>This is a real terminal - you can type commands directly</li>
+                                <li>Use arrow keys to navigate menu options in update tools</li>
+                                <li>Press Enter to select a version</li>
+                                <li>Ctrl+C to cancel/exit any command</li>
+                                <li>The terminal shows real-time output with full color support</li>
+                            </ul>
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.js"></script>
+
+<script>
+    let terminal = null;
+    let fitAddon = null;
+    let searchAddon = null;
+    let webLinksAddon = null;
+    let ws = null;
+    let commandQueue = [];
+
+    // Initialize the terminal
+    function initTerminal() {
+        // Create terminal instance
+        terminal = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#000000',
+                foreground: '#00ff00',
+                cursor: '#00ff00',
+                black: '#000000',
+                red: '#cd3131',
+                green: '#0dbc79',
+                yellow: '#e5e510',
+                blue: '#2472c8',
+                magenta: '#bc3fbc',
+                cyan: '#11a8cd',
+                white: '#e5e5e5',
+                brightBlack: '#666666',
+                brightRed: '#f14c4c',
+                brightGreen: '#23d18b',
+                brightYellow: '#f5f543',
+                brightBlue: '#3b8eea',
+                brightMagenta: '#d670d6',
+                brightCyan: '#29b8db',
+                brightWhite: '#e5e5e5'
+            },
+            scrollback: 1000,
+            convertEol: true
+        });
+
+        // Initialize addons
+        fitAddon = new FitAddon.FitAddon();
+        terminal.loadAddon(fitAddon);
+
+        webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        terminal.loadAddon(webLinksAddon);
+
+        searchAddon = new SearchAddon.SearchAddon();
+        terminal.loadAddon(searchAddon);
+
+        // Open terminal in the container
+        terminal.open(document.getElementById('terminal'));
+
+        // Fit terminal to container
+        fitAddon.fit();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            fitAddon.fit();
+        });
+
+        // Connect WebSocket
+        connectWebSocket();
+    }
+
+    // Connect to WebSocket using Socket.IO
+    function connectWebSocket() {
+        updateConnectionStatus('connecting');
+
+        // Connect to Socket.IO namespace
+        ws = io('/ws/terminal', {
+            transports: ['websocket'],
+            upgrade: false
+        });
+
+        ws.on('connect', () => {
+            console.log('WebSocket connected');
+            updateConnectionStatus('connected');
+
+            // Send any queued commands
+            while (commandQueue.length > 0) {
+                const cmd = commandQueue.shift();
+                sendCommand(cmd);
+            }
+
+            // Send terminal size
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+                ws.emit('terminal_input', {
+                    type: 'resize',
+                    cols: dims.cols,
+                    rows: dims.rows
+                });
+            }
+        });
+
+        ws.on('terminal_output', (data) => {
+            // Write received data to terminal
+            terminal.write(data);
+        });
+
+        ws.on('disconnect', () => {
+            console.log('WebSocket disconnected');
+            updateConnectionStatus('disconnected');
+            terminal.write('\r\n\x1b[31mConnection lost. Click Reconnect to restore.\x1b[0m\r\n');
+        });
+
+        ws.on('error', (error) => {
+            console.error('WebSocket error:', error);
+            updateConnectionStatus('disconnected');
+        });
+
+        // Handle terminal input
+        terminal.onData((data) => {
+            if (ws && ws.connected) {
+                ws.emit('terminal_input', {
+                    type: 'input',
+                    data: data
+                });
+            }
+        });
+
+        // Handle terminal resize
+        terminal.onResize((size) => {
+            if (ws && ws.connected) {
+                ws.emit('terminal_input', {
+                    type: 'resize',
+                    cols: size.cols,
+                    rows: size.rows
+                });
+            }
+        });
+    }
+
+    // Update connection status display
+    function updateConnectionStatus(status) {
+        const statusElement = document.getElementById('connection-status');
+        statusElement.className = 'connection-status';
+
+        switch(status) {
+            case 'connected':
+                statusElement.textContent = 'Connected';
+                statusElement.classList.add('status-connected');
+                break;
+            case 'disconnected':
+                statusElement.textContent = 'Disconnected';
+                statusElement.classList.add('status-disconnected');
+                break;
+            case 'connecting':
+                statusElement.textContent = 'Connecting...';
+                statusElement.classList.add('status-connecting');
+                break;
+        }
+    }
+
+    // Send command to terminal
+    function sendCommand(command) {
+        if (ws && ws.connected) {
+            ws.emit('terminal_input', {
+                type: 'command',
+                command: command
+            });
+        } else {
+            // Queue command to send when connected
+            commandQueue.push(command);
+            reconnectTerminal();
+        }
+    }
+
+    // Start Companion update
+    function startCompanionUpdate() {
+        sendCommand('sudo companion-update');
+    }
+
+    // Start Satellite update
+    function startSatelliteUpdate() {
+        sendCommand('sudo satellite-update');
+    }
+
+    // Clear terminal
+    function clearTerminal() {
+        terminal.clear();
+    }
+
+    // Send Ctrl+C
+    function sendCtrlC() {
+        if (ws && ws.connected) {
+            ws.emit('terminal_input', {
+                type: 'input',
+                data: '\x03'  // Ctrl+C character
+            });
+        }
+    }
+
+    // Reconnect terminal
+    function reconnectTerminal() {
+        if (ws) {
+            ws.disconnect();
+        }
+        setTimeout(() => {
+            connectWebSocket();
+        }, 500);
+    }
+
+    // Initialize on page load
+    $(document).ready(function() {
+        initTerminal();
+
+        // Add keyboard shortcuts
+        $(document).keydown(function(e) {
+            // Ctrl+Shift+F for search
+            if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+                searchAddon.findNext(prompt('Search for:'));
+                e.preventDefault();
+            }
+        });
+    });
+
+    // Clean up on page unload
+    $(window).on('beforeunload', function() {
+        if (ws) {
+            ws.disconnect();
+        }
+    });
+</script>
+{% endblock %}

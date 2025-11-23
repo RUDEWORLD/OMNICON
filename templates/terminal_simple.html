@@ -130,17 +130,61 @@
     let updateInterval = null;
     let isRunning = false;
 
+    // Process and format menu output
+    function processMenuOutput(text) {
+        // First strip ANSI codes
+        let clean = text
+            // Remove color codes
+            .replace(/\x1b\[[0-9;]*m/g, '')
+            // Remove cursor positioning codes
+            .replace(/\x1b\[[0-9]*[A-Z]/g, '')
+            // Remove cursor save/restore
+            .replace(/\x1b\[s/g, '')
+            .replace(/\x1b\[u/g, '')
+            // Remove other escape sequences
+            .replace(/\x1b\[[?][0-9;]*[a-zA-Z]/g, '')
+            .replace(/\x1b\[K/g, '')  // Clear to end of line
+            .replace(/\x1b\[2K/g, '') // Clear entire line
+            .replace(/\x1b\[J/g, '')  // Clear screen
+            .replace(/\x1b\[2J/g, '') // Clear entire screen
+            .replace(/\x1b\[\d+G/g, '') // Move cursor to column
+            .replace(/\r/g, '');      // Remove carriage returns
+
+        // Convert menu selection indicators
+        clean = clean.replace(/❯/g, '→');  // Replace fancy arrow with simple one
+        clean = clean.replace(/›/g, '→');  // Alternative arrow style
+
+        return clean;
+    }
+
     // Append text to terminal
     function appendToTerminal(text, className = '') {
         const terminal = document.getElementById('terminal');
+        // Process menu output and strip ANSI codes
+        const cleanText = processMenuOutput(text);
+
         if (className) {
             const line = document.createElement('div');
             line.className = 'terminal-line ' + className;
-            line.textContent = text;
+            line.textContent = cleanText;
             terminal.appendChild(line);
         } else {
-            // For raw output, preserve formatting
-            terminal.innerHTML += text;
+            // For raw output, handle newlines properly
+            const lines = cleanText.split('\n');
+            lines.forEach(line => {
+                if (line.trim()) {
+                    const div = document.createElement('div');
+                    div.className = 'terminal-line';
+                    // Highlight selected menu items
+                    if (line.includes('→')) {
+                        div.innerHTML = line.replace('→', '<span style="color: #0ff;">→</span>');
+                        div.style.backgroundColor = '#222';
+                    } else {
+                        div.textContent = line;
+                    }
+                    terminal.appendChild(div);
+                }
+            });
         }
         terminal.scrollTop = terminal.scrollHeight;
     }
@@ -257,29 +301,108 @@
 
                             // Add command line
                             const cmdLine = data.output.includes('satellite-update') ?
-                                          '$ sudo satellite-update\n' :
-                                          '$ sudo companion-update\n';
-                            appendToTerminal(cmdLine);
+                                          '$ sudo satellite-update' :
+                                          '$ sudo companion-update';
+                            appendToTerminal(cmdLine, 'terminal-prompt');
 
-                            // Add the menu content
-                            appendToTerminal(menuContent.join('\n'));
+                            // Process and display the menu content
+                            const menuText = menuContent.join('\n');
+                            const cleanMenu = processMenuOutput(menuText);
 
-                            lastMenuContent = menuContent.join('\n');
+                            // Split into lines and display each
+                            cleanMenu.split('\n').forEach(line => {
+                                if (line.trim()) {
+                                    const div = document.createElement('div');
+                                    div.className = 'terminal-line';
+
+                                    // Style the question line
+                                    if (line.includes('What version do you want?') ||
+                                        line.includes('Which version do you want?')) {
+                                        div.style.color = '#0ff';
+                                        div.style.fontWeight = 'bold';
+                                    }
+                                    // Highlight selected items
+                                    else if (line.includes('→')) {
+                                        div.innerHTML = '  <span style="color: #0f0;">→</span> ' +
+                                                      line.replace(/[→❯›]/g, '').trim();
+                                        div.style.backgroundColor = '#333';
+                                    }
+                                    // Regular menu items
+                                    else if (line.match(/^\s*(latest|specific|custom|cancel|v?\d+\\.)/)) {
+                                        div.innerHTML = '    ' + line.trim();
+                                    }
+                                    else {
+                                        div.textContent = line;
+                                    }
+
+                                    terminal.appendChild(div);
+                                }
+                            });
+
+                            lastMenuContent = cleanMenu;
                         } else if (lastMenuContent) {
                             // If we can't parse the menu, show the last known good menu
                             terminal.innerHTML = '';
                             const cmdLine = data.output.includes('satellite-update') ?
-                                          '$ sudo satellite-update\n' :
-                                          '$ sudo companion-update\n';
-                            appendToTerminal(cmdLine);
-                            appendToTerminal(lastMenuContent);
+                                          '$ sudo satellite-update' :
+                                          '$ sudo companion-update';
+                            appendToTerminal(cmdLine, 'terminal-prompt');
+
+                            // Re-display the cached menu
+                            lastMenuContent.split('\n').forEach(line => {
+                                if (line.trim()) {
+                                    const div = document.createElement('div');
+                                    div.className = 'terminal-line';
+
+                                    if (line.includes('What version do you want?') ||
+                                        line.includes('Which version do you want?')) {
+                                        div.style.color = '#0ff';
+                                        div.style.fontWeight = 'bold';
+                                    }
+                                    else if (line.includes('→')) {
+                                        div.innerHTML = '  <span style="color: #0f0;">→</span> ' +
+                                                      line.replace(/[→❯›]/g, '').trim();
+                                        div.style.backgroundColor = '#333';
+                                    }
+                                    else if (line.match(/^\s*(latest|specific|custom|cancel|v?\d+\\.)/)) {
+                                        div.innerHTML = '    ' + line.trim();
+                                    }
+                                    else {
+                                        div.textContent = line;
+                                    }
+
+                                    terminal.appendChild(div);
+                                }
+                            });
                         }
                     } else {
                         // Not in menu mode, show incremental updates
                         lastMenuContent = ''; // Clear menu cache
                         if (data.output.length > lastOutputLength) {
                             const newOutput = data.output.substring(lastOutputLength);
-                            appendToTerminal(newOutput);
+                            // Process the output to remove ANSI codes
+                            const cleanOutput = processMenuOutput(newOutput);
+
+                            // Split by lines and add each
+                            cleanOutput.split('\n').forEach(line => {
+                                if (line.trim()) {
+                                    const div = document.createElement('div');
+                                    div.className = 'terminal-line';
+
+                                    // Color code different types of output
+                                    if (line.includes('ERROR') || line.includes('error')) {
+                                        div.className += ' terminal-error';
+                                    } else if (line.includes('SUCCESS') || line.includes('success') ||
+                                             line.includes('Complete') || line.includes('complete')) {
+                                        div.className += ' terminal-success';
+                                    }
+
+                                    div.textContent = line;
+                                    terminal.appendChild(div);
+                                }
+                            });
+
+                            terminal.scrollTop = terminal.scrollHeight;
                             lastOutputLength = data.output.length;
                         }
                     }

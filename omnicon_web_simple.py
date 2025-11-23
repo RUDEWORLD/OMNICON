@@ -19,6 +19,9 @@ from datetime import datetime
 import threading
 import requests
 
+# Try to import SocketIO support - if not available, fall back to simple terminal
+SOCKETIO_AVAILABLE = False  # Disabled for now until we fix it properly
+
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -28,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.1.1"  # Improved service restart handling for updates
+WEB_GUI_VERSION = "4.1.4"  # Added direct Companion/Satellite update buttons, removed terminal dependency
 
 # Configuration
 STATE_FILE = "state.json"
@@ -307,6 +310,7 @@ def logout():
 @login_required
 def terminal():
     """Terminal page for interactive updates"""
+    # For now, just use simple terminal until we fix xterm
     return render_template('terminal_simple.html')
 
 @app.route('/api/system/info')
@@ -606,6 +610,66 @@ def api_set_timezone():
         logging.error(f"Error setting timezone: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/rtc/sync', methods=['POST'])
+@login_required
+def api_rtc_sync():
+    """Sync RTC with system time"""
+    try:
+        # Run hwclock command to sync RTC with system time
+        result = subprocess.run(
+            ["sudo", "hwclock", "--systohc"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode == 0:
+            logging.info("RTC synced with system time")
+            return jsonify({"success": True, "message": "RTC synced successfully"})
+        else:
+            error_msg = result.stderr or "Failed to sync RTC"
+            logging.error(f"Failed to sync RTC: {error_msg}")
+            return jsonify({"success": False, "error": error_msg}), 500
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "error": "Command timed out"}), 500
+    except Exception as e:
+        logging.error(f"Error syncing RTC: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/rtc/check')
+@login_required
+def api_rtc_check():
+    """Check RTC time"""
+    try:
+        # Read RTC time
+        rtc_result = subprocess.run(
+            ["sudo", "hwclock", "-r"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        rtc_time = "Unable to read"
+        if rtc_result.returncode == 0 and rtc_result.stdout:
+            # Parse the hwclock output
+            rtc_time = rtc_result.stdout.strip()
+
+        # Also get system time for comparison
+        system_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        return jsonify({
+            "rtc_time": rtc_time,
+            "system_time": system_time,
+            "success": True
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "error": "Command timed out"}), 500
+    except Exception as e:
+        logging.error(f"Error checking RTC: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/api/system/power', methods=['POST'])
 @login_required
 def api_system_power():
@@ -653,6 +717,105 @@ def api_button_press():
 
 # Simple Terminal handling (no WebSocket required)
 terminal_sessions = {}
+
+# PTY-based terminal sessions for WebSocket connections (disabled for now)
+pty_sessions = {}
+
+# PTY Terminal class removed temporarily while we fix issues
+if False:  # SOCKETIO_AVAILABLE disabled
+    class PTYTerminalSession:
+        """PTY-based terminal session for real terminal emulation"""
+        def __init__(self, sid):
+            self.sid = sid
+            self.pid = None
+            self.fd = None
+            self.running = False
+
+        def start(self):
+            """Start a PTY session with a shell"""
+            try:
+                # Create a new pseudo-terminal
+                self.pid, self.fd = pty.fork()
+
+                if self.pid == 0:
+                    # Child process - exec shell
+                    os.environ['TERM'] = 'xterm-256color'
+                    os.execvp('/bin/bash', ['/bin/bash'])
+                else:
+                    # Parent process
+                    self.running = True
+                    # Set non-blocking
+                    flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
+                    fcntl.fcntl(self.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                    # Start reader thread
+                    threading.Thread(target=self._read_output, daemon=True).start()
+                    return True
+
+            except Exception as e:
+                logging.error(f"Failed to start PTY session: {e}")
+                return False
+
+        def _read_output(self):
+            """Read output from PTY and send to client"""
+            while self.running:
+                try:
+                    # Check if data is available
+                    ready, _, _ = select.select([self.fd], [], [], 0.1)
+                    if ready:
+                        output = os.read(self.fd, 4096).decode('utf-8', errors='replace')
+                        if output:
+                            # Send to WebSocket client
+                            socketio.emit('terminal_output', output, room=self.sid)
+                        else:
+                            # EOF - process ended
+                            self.stop()
+                            break
+                except OSError:
+                    # Process ended
+                    self.stop()
+                    break
+                except Exception as e:
+                    logging.error(f"Error reading PTY output: {e}")
+
+        def write(self, data):
+            """Write data to PTY"""
+            if self.fd and self.running:
+                try:
+                    os.write(self.fd, data.encode())
+                    return True
+                except Exception as e:
+                    logging.error(f"Error writing to PTY: {e}")
+                    return False
+            return False
+
+        def resize(self, cols, rows):
+            """Resize the terminal"""
+            if self.fd:
+                try:
+                    # Send terminal size change
+                    winsize = struct.pack('HHHH', rows, cols, 0, 0)
+                    fcntl.ioctl(self.fd, termios.TIOCSWINSZ, winsize)
+                    return True
+                except Exception as e:
+                    logging.error(f"Error resizing PTY: {e}")
+                    return False
+            return False
+
+        def stop(self):
+            """Stop the PTY session"""
+            self.running = False
+            if self.fd:
+                try:
+                    os.close(self.fd)
+                except:
+                    pass
+            if self.pid:
+                try:
+                    os.kill(self.pid, 9)
+                    os.waitpid(self.pid, os.WNOHANG)
+                except:
+                    pass
 
 class SimpleTerminalSession:
     """Manage a terminal session without WebSockets"""
@@ -833,6 +996,165 @@ def api_update_omnicon():
         logging.error(f"Error updating omnicon: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+# Application versions and updates
+@app.route('/api/versions', methods=['GET'])
+@login_required
+def api_get_versions():
+    """Get all application versions"""
+    try:
+        import re
+
+        # Get Companion version
+        companion_version = 'Unknown'
+        try:
+            with open('/opt/companion/package.json', 'r') as f:
+                data = json.load(f)
+                version = data.get('version', 'Unknown')
+                # Extract only the first three numbers
+                match = re.match(r'^(\d+\.\d+\.\d+)', version)
+                if match:
+                    companion_version = match.group(1)
+        except:
+            pass
+
+        # Get Satellite version
+        satellite_version = 'Unknown'
+        try:
+            with open('/opt/companion-satellite/satellite/package.json', 'r') as f:
+                data = json.load(f)
+                version = data.get('version', 'Unknown')
+                # Extract only the first three numbers
+                match = re.match(r'^(\d+\.\d+\.\d+)', version)
+                if match:
+                    satellite_version = match.group(1)
+        except:
+            pass
+
+        # Get Omnicon version
+        omnicon_version = 'Unknown'
+        try:
+            with open('/home/omnicon/OLED_Stats/omnicon.py', 'r') as f:
+                for line in f:
+                    if line.startswith("# V"):
+                        omnicon_version = line.strip().split(' ')[1]
+                        break
+        except:
+            pass
+
+        return jsonify({
+            'omnicon': omnicon_version,
+            'companion': companion_version,
+            'satellite': satellite_version
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/companion/update', methods=['POST'])
+@login_required
+def api_update_companion():
+    """Update Companion to stable or beta"""
+    try:
+        data = request.get_json()
+        update_type = data.get('type', 'stable')
+
+        # Create a background thread to run the update
+        def run_update():
+            try:
+                if update_type == 'stable':
+                    # Send up arrow + enter to select stable
+                    cmd = 'echo -e "\\033[A\\n" | sudo companion-update'
+                else:  # beta
+                    # Send just enter to select beta
+                    cmd = 'echo -e "\\n" | sudo companion-update'
+
+                # Run the update command
+                process = subprocess.Popen(cmd, shell=True,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT,
+                                         text=True)
+
+                # Store output for progress tracking
+                output_lines = []
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        output_lines.append(line.strip())
+                        logging.info(f"Companion update: {line.strip()}")
+
+                process.wait()
+
+                # After update completes, reboot
+                logging.info("Companion update complete, rebooting...")
+                subprocess.run(['sudo', 'reboot'])
+
+            except Exception as e:
+                logging.error(f"Error in companion update thread: {e}")
+
+        # Start the update in background
+        thread = threading.Thread(target=run_update, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "message": f"Starting Companion {update_type} update. System will reboot when complete."
+        })
+
+    except Exception as e:
+        logging.error(f"Error updating companion: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/satellite/update', methods=['POST'])
+@login_required
+def api_update_satellite():
+    """Update Satellite to stable or beta"""
+    try:
+        data = request.get_json()
+        update_type = data.get('type', 'stable')
+
+        # Create a background thread to run the update
+        def run_update():
+            try:
+                if update_type == 'stable':
+                    # Send up arrow + enter to select stable
+                    cmd = 'echo -e "\\033[A\\n" | sudo satellite-update'
+                else:  # beta
+                    # Send just enter to select beta
+                    cmd = 'echo -e "\\n" | sudo satellite-update'
+
+                # Run the update command
+                process = subprocess.Popen(cmd, shell=True,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT,
+                                         text=True)
+
+                # Store output for progress tracking
+                output_lines = []
+                for line in iter(process.stdout.readline, ''):
+                    if line:
+                        output_lines.append(line.strip())
+                        logging.info(f"Satellite update: {line.strip()}")
+
+                process.wait()
+
+                # After update completes, reboot
+                logging.info("Satellite update complete, rebooting...")
+                subprocess.run(['sudo', 'reboot'])
+
+            except Exception as e:
+                logging.error(f"Error in satellite update thread: {e}")
+
+        # Start the update in background
+        thread = threading.Thread(target=run_update, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "message": f"Starting Satellite {update_type} update. System will reboot when complete."
+        })
+
+    except Exception as e:
+        logging.error(f"Error updating satellite: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # Terminal API routes
 @app.route('/api/terminal/start', methods=['POST'])
 @login_required
@@ -928,6 +1250,66 @@ def get_terminal_output():
         logging.error(f"Error getting output: {e}")
         return jsonify({'output': '', 'running': False, 'error': str(e)})
 
+# WebSocket handlers for xterm.js terminal (disabled for now)
+if False:  # SOCKETIO_AVAILABLE disabled
+    @socketio.on('connect', namespace='/ws/terminal')
+    def handle_terminal_connect():
+        """Handle WebSocket connection for terminal"""
+        sid = request.sid
+        logging.info(f"Terminal WebSocket connected: {sid}")
+
+        # Create new PTY session
+        terminal = PTYTerminalSession(sid)
+        pty_sessions[sid] = terminal
+
+        if terminal.start():
+            emit('terminal_output', '\r\nTerminal connected. Type commands below.\r\n')
+        else:
+            emit('terminal_output', '\r\nFailed to start terminal session.\r\n')
+            disconnect()
+
+    @socketio.on('disconnect', namespace='/ws/terminal')
+    def handle_terminal_disconnect():
+        """Handle WebSocket disconnection"""
+        sid = request.sid
+        logging.info(f"Terminal WebSocket disconnected: {sid}")
+
+        # Clean up PTY session
+        if sid in pty_sessions:
+            pty_sessions[sid].stop()
+            del pty_sessions[sid]
+
+    @socketio.on('terminal_input', namespace='/ws/terminal')
+    def handle_terminal_input(data):
+        """Handle terminal input from client"""
+        sid = request.sid
+
+        if sid not in pty_sessions:
+            emit('terminal_output', '\r\nNo active session. Please reconnect.\r\n')
+            return
+
+        terminal = pty_sessions[sid]
+
+        # Handle different message types
+        msg_data = data if isinstance(data, dict) else json.loads(data)
+        msg_type = msg_data.get('type', 'input')
+
+        if msg_type == 'input':
+            # Regular terminal input
+            terminal.write(msg_data.get('data', ''))
+
+        elif msg_type == 'resize':
+            # Terminal resize
+            cols = msg_data.get('cols', 80)
+            rows = msg_data.get('rows', 24)
+            terminal.resize(cols, rows)
+
+        elif msg_type == 'command':
+            # Execute a command
+            command = msg_data.get('command', '')
+            if command:
+                terminal.write(command + '\n')
+
 if __name__ == '__main__':
     config = load_config()
 
@@ -940,4 +1322,5 @@ if __name__ == '__main__':
     print("")
 
     # Run Flask app
+    print("Running with simple terminal")
     app.run(host='0.0.0.0', port=config.get('port', 8080), debug=False)

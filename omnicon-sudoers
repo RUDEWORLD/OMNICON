@@ -11,3 +11,7 @@ omnicon ALL=(ALL) NOPASSWD: /usr/bin/companion-update
 omnicon ALL=(ALL) NOPASSWD: /usr/bin/satellite-update
 omnicon ALL=(ALL) NOPASSWD: /sbin/shutdown
 omnicon ALL=(ALL) NOPASSWD: /sbin/reboot
+
+# Allow omnicon user to manage RTC without password
+omnicon ALL=(ALL) NOPASSWD: /sbin/hwclock
+omnicon ALL=(ALL) NOPASSWD: /usr/sbin/hwclock

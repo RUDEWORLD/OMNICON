@@ -777,3 +777,219 @@ function saveTimezone() {
         }
     });
 }
+
+// Sync RTC with system time
+function syncRTC() {
+    if (!confirm('Sync RTC with current system time?')) {
+        return;
+    }
+
+    $.ajax({
+        url: '/api/rtc/sync',
+        method: 'POST',
+        success: function(data) {
+            showToast('Success', 'RTC synced with system time', 'success');
+            // Automatically check RTC time after sync
+            setTimeout(checkRTC, 500);
+        },
+        error: function(xhr) {
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to sync RTC', 'error');
+        }
+    });
+}
+
+// Check RTC time
+function checkRTC() {
+    $('#rtcStatus').show();
+    $('#rtcTime').text('Checking...');
+
+    $.ajax({
+        url: '/api/rtc/check',
+        method: 'GET',
+        success: function(data) {
+            if (data.rtc_time) {
+                $('#rtcTime').text(data.rtc_time);
+                // Also show system time for comparison
+                if (data.system_time) {
+                    $('#rtcTime').html(`${data.rtc_time}<br><small>System: ${data.system_time}</small>`);
+                }
+            } else {
+                $('#rtcTime').text('Unable to read RTC');
+            }
+        },
+        error: function(xhr) {
+            $('#rtcTime').text('Error reading RTC');
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to check RTC', 'error');
+        }
+    });
+}
+
+// Load application versions (Omnicon, Companion, Satellite)
+function loadApplicationVersions() {
+    $.ajax({
+        url: '/api/versions',
+        method: 'GET',
+        success: function(data) {
+            $('#currentOmniconVersion').text(data.omnicon || '--');
+            $('#companionVersion').text(data.companion || '--');
+            $('#satelliteVersion').text(data.satellite || '--');
+        },
+        error: function(xhr) {
+            console.error('Failed to load versions:', xhr);
+        }
+    });
+}
+
+// Show Companion update options
+function showCompanionUpdate() {
+    // Create modal HTML if it doesn't exist
+    if (!$('#companionUpdateModal').length) {
+        const modalHtml = `
+            <div class="modal fade" id="companionUpdateModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Update Companion</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div id="companionUpdateOptions">
+                                <p>Select update type for Companion:</p>
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-primary" onclick="updateCompanion('stable')">
+                                        <i class="fas fa-shield-alt"></i> Update to Current Stable
+                                    </button>
+                                    <button class="btn btn-warning" onclick="updateCompanion('beta')">
+                                        <i class="fas fa-flask"></i> Update to Current Beta
+                                    </button>
+                                    <button class="btn btn-secondary" data-bs-dismiss="modal">
+                                        <i class="fas fa-times"></i> Cancel
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="companionUpdateProgress" style="display: none;">
+                                <div class="text-center">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Updating...</span>
+                                    </div>
+                                    <p class="mt-3">Updating Companion...</p>
+                                    <p class="text-muted">System will reboot when complete.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('body').append(modalHtml);
+    }
+
+    const modal = new bootstrap.Modal(document.getElementById('companionUpdateModal'));
+    modal.show();
+}
+
+// Show Satellite update options
+function showSatelliteUpdate() {
+    // Create modal HTML if it doesn't exist
+    if (!$('#satelliteUpdateModal').length) {
+        const modalHtml = `
+            <div class="modal fade" id="satelliteUpdateModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Update Satellite</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div id="satelliteUpdateOptions">
+                                <p>Select update type for Satellite:</p>
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-primary" onclick="updateSatellite('stable')">
+                                        <i class="fas fa-shield-alt"></i> Update to Current Stable
+                                    </button>
+                                    <button class="btn btn-warning" onclick="updateSatellite('beta')">
+                                        <i class="fas fa-flask"></i> Update to Current Beta
+                                    </button>
+                                    <button class="btn btn-secondary" data-bs-dismiss="modal">
+                                        <i class="fas fa-times"></i> Cancel
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="satelliteUpdateProgress" style="display: none;">
+                                <div class="text-center">
+                                    <div class="spinner-border text-warning" role="status">
+                                        <span class="visually-hidden">Updating...</span>
+                                    </div>
+                                    <p class="mt-3">Updating Satellite...</p>
+                                    <p class="text-muted">System will reboot when complete.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('body').append(modalHtml);
+    }
+
+    const modal = new bootstrap.Modal(document.getElementById('satelliteUpdateModal'));
+    modal.show();
+}
+
+// Update Companion
+function updateCompanion(type) {
+    if (!confirm(`Update Companion to ${type} version? The system will restart.`)) {
+        return;
+    }
+
+    // Hide options, show progress
+    $('#companionUpdateOptions').hide();
+    $('#companionUpdateProgress').show();
+
+    $.ajax({
+        url: '/api/companion/update',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ type: type }),
+        success: function(data) {
+            showToast('Success', data.message, 'success');
+            // Modal will stay open showing progress until system reboots
+        },
+        error: function(xhr) {
+            $('#companionUpdateOptions').show();
+            $('#companionUpdateProgress').hide();
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to start update', 'error');
+        }
+    });
+}
+
+// Update Satellite
+function updateSatellite(type) {
+    if (!confirm(`Update Satellite to ${type} version? The system will restart.`)) {
+        return;
+    }
+
+    // Hide options, show progress
+    $('#satelliteUpdateOptions').hide();
+    $('#satelliteUpdateProgress').show();
+
+    $.ajax({
+        url: '/api/satellite/update',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ type: type }),
+        success: function(data) {
+            showToast('Success', data.message, 'success');
+            // Modal will stay open showing progress until system reboots
+        },
+        error: function(xhr) {
+            $('#satelliteUpdateOptions').show();
+            $('#satelliteUpdateProgress').hide();
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to start update', 'error');
+        }
+    });
+}

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Terminal Test - Omnicon{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">Terminal Configuration Test</h5>
+                </div>
+                <div class="card-body">
+                    <h4>Terminal Status Check</h4>
+
+                    <div class="alert alert-info">
+                        <h5>Current Terminal Mode:</h5>
+                        <p id="terminal-mode">Checking...</p>
+                    </div>
+
+                    <div class="alert alert-warning">
+                        <h5>Available Terminal Pages:</h5>
+                        <ul>
+                            <li><a href="/terminal" target="_blank">/terminal</a> - Auto-selected terminal (current)</li>
+                            <li><a href="/terminal_simple" target="_blank">/terminal_simple</a> - Force simple terminal</li>
+                            <li><a href="/terminal_xterm" target="_blank">/terminal_xterm</a> - Force xterm.js terminal</li>
+                        </ul>
+                    </div>
+
+                    <div class="alert alert-success">
+                        <h5>WebSocket Test:</h5>
+                        <button class="btn btn-primary" onclick="testWebSocket()">Test WebSocket Connection</button>
+                        <div id="ws-result" class="mt-2"></div>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <h5>Debug Information:</h5>
+                        <pre id="debug-info"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+<script>
+    // Check which terminal mode is active
+    $.get('/api/terminal/mode', function(data) {
+        $('#terminal-mode').text(data.mode || 'Unknown');
+        $('#debug-info').text(JSON.stringify(data, null, 2));
+    }).fail(function() {
+        $('#terminal-mode').text('Error checking mode');
+    });
+
+    // Test WebSocket connection
+    function testWebSocket() {
+        $('#ws-result').html('<div class="spinner-border spinner-border-sm" role="status"><span class="sr-only">Testing...</span></div> Testing WebSocket...');
+
+        try {
+            const socket = io('/ws/terminal', {
+                transports: ['websocket'],
+                upgrade: false,
+                timeout: 5000
+            });
+
+            socket.on('connect', function() {
+                $('#ws-result').html('<span class="text-success">✓ WebSocket connected successfully!</span>');
+                socket.disconnect();
+            });
+
+            socket.on('connect_error', function(error) {
+                $('#ws-result').html('<span class="text-danger">✗ WebSocket connection failed: ' + error.message + '</span>');
+            });
+
+            setTimeout(function() {
+                if (socket.connected === false) {
+                    $('#ws-result').html('<span class="text-warning">⚠ WebSocket connection timeout</span>');
+                    socket.disconnect();
+                }
+            }, 5000);
+
+        } catch (error) {
+            $('#ws-result').html('<span class="text-danger">✗ Error: ' + error.message + '</span>');
+        }
+    }
+</script>
+{% endblock %}

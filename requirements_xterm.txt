@@ -1,0 +1,5 @@
+# Requirements for xterm.js terminal support
+flask-socketio>=5.3.0
+python-socketio>=5.10.0
+python-engineio>=4.8.0
+eventlet>=0.33.3  # Or gevent, but eventlet is easier
