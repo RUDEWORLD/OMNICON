@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.1.5
+# V4.1.9
 # 11/22/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1230,24 +1230,140 @@ def download_and_extract_zip_from_github(tag, extract_to):
         logging.error(f"Update ZIP download failed: {e}")
         return False, str(e)
 
+def load_github_token():
+    """Load GitHub token from config file if available."""
+    try:
+        config_path = '/home/pi/OLED_Stats_pi/config.json'
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                token = config.get('github_token', '').strip()
+                if token:
+                    logging.info("GitHub token loaded from config")
+                    return token
+                else:
+                    logging.info("No GitHub token found in config")
+    except Exception as e:
+        logging.warning(f"Could not load GitHub token: {e}")
+    return None
+
 def fetch_github_tags():
     url = "https://api.github.com/repos/RUDEWORLD/OMNICON/tags"
+    print(f"DEBUG: fetch_github_tags called, URL: {url}")
+
+    # Load GitHub token if available
+    github_token = load_github_token()
+
+    # Build headers with authentication if token is available
+    base_headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Omnicon-Updater/4.1.9'
+    }
+
+    if github_token:
+        base_headers['Authorization'] = f'token {github_token}'
+        logging.info("Using GitHub authentication (5000 requests/hour limit)")
+    else:
+        logging.warning("No GitHub token - using unauthenticated API (60 requests/hour limit)")
+        logging.warning("To add a token, edit /home/pi/OLED_Stats_pi/config.json")
+
+    # Try with full headers first, then fallback options
+    headers_options = [
+        base_headers,
+        {'User-Agent': 'Omnicon-Updater/4.1.9'},  # Minimal headers
+        {}  # Try with no headers as last resort
+    ]
+
+    for headers in headers_options:
+        try:
+            logging.info(f"Attempting GitHub API with headers: {headers}")
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            tags = response.json()
+            logging.info(f"Successfully fetched {len(tags)} tags from GitHub")
+            return [tag['name'] for tag in tags]
+        except requests.exceptions.Timeout:
+            logging.error("GitHub API request timed out")
+            continue
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"Cannot connect to GitHub API: {e}")
+            continue
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"GitHub API HTTP error: {e}")
+            if e.response:
+                logging.error(f"Response status: {e.response.status_code}")
+                logging.error(f"Response headers: {e.response.headers}")
+                if e.response.status_code == 403:
+                    # Check if it's rate limit or authentication issue
+                    if 'rate limit' in str(e.response.text).lower():
+                        logging.error("GitHub API rate limit exceeded!")
+                        if not github_token:
+                            logging.error("Solution: Add a GitHub token to /home/pi/OLED_Stats_pi/config.json")
+                            logging.error("Visit https://github.com/settings/tokens/new to create one")
+                    else:
+                        logging.error("GitHub API access denied (check token permissions)")
+                    # Try to get rate limit info
+                    try:
+                        remaining = e.response.headers.get('X-RateLimit-Remaining', 'unknown')
+                        reset_time = e.response.headers.get('X-RateLimit-Reset', 'unknown')
+                        if reset_time != 'unknown':
+                            reset_datetime = datetime.fromtimestamp(int(reset_time))
+                            logging.error(f"Rate limit remaining: {remaining}, resets at: {reset_datetime}")
+                        else:
+                            logging.error(f"Rate limit remaining: {remaining}")
+                    except:
+                        pass
+            continue
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to fetch tags from GitHub: {e}")
+            continue
+        except Exception as e:
+            logging.error(f"Unexpected error fetching tags: {e}")
+            continue
+
+    # If all API attempts failed, try alternative approach using releases endpoint
+    logging.warning("Tags API failed, trying releases endpoint as fallback...")
+    releases_url = "https://api.github.com/repos/RUDEWORLD/OMNICON/releases"
+
     try:
-        response = requests.get(url)
+        headers = base_headers if github_token else {'User-Agent': 'Omnicon-Updater/4.1.9'}
+        response = requests.get(releases_url, headers=headers, timeout=15)
         response.raise_for_status()
-        tags = response.json()
-        return [tag['name'] for tag in tags]
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to fetch tags from GitHub: {e}")
-        return []
+        releases = response.json()
+        # Extract tag names from releases
+        tags = [release['tag_name'] for release in releases if 'tag_name' in release]
+        if tags:
+            logging.info(f"Successfully fetched {len(tags)} releases as fallback")
+            return tags
+    except Exception as e:
+        logging.error(f"Releases endpoint also failed: {e}")
+
+    logging.error("All attempts to fetch GitHub tags failed")
+    return []
 
 def update_omnicon():
     global available_versions, current_version, selected_version
     selected_version = None  # Initialize selected_version to None
+    print(f"DEBUG: update_omnicon called, available_versions = {available_versions}")
+    logging.info(f"update_omnicon called, current version = {current_version}")
+
     if not available_versions:
-        available_versions = fetch_github_tags()
-        if not available_versions:
+        # First check if we have internet
+        print("DEBUG: Checking internet connection...")
+        if not is_connected():
+            print("DEBUG: No internet connection detected")
             return "PLEASE CONNECT\nTO INTERNET"
+
+        # We have internet, try to fetch tags
+        print("DEBUG: Internet OK, fetching GitHub tags...")
+        available_versions = fetch_github_tags()
+        print(f"DEBUG: fetch_github_tags returned: {available_versions}")
+
+        if not available_versions:
+            # Internet is OK but GitHub fetch failed
+            print("DEBUG: GitHub fetch failed despite internet connection")
+            logging.error("Connected to internet but cannot fetch updates from GitHub")
+            return "UPDATE CHECK\nFAILED"
     # Use lstrip to remove any leading 'v' or 'V'
     current_version_tuple = tuple(map(int, current_version.lstrip('vV').split('.')))
     newer_versions = [
@@ -1276,9 +1392,16 @@ def downgrade_omnicon():
     global available_versions, current_version, selected_version
     selected_version = None  # Initialize selected_version to None
     if not available_versions:
+        # First check if we have internet
+        if not is_connected():
+            return "PLEASE CONNECT\nTO INTERNET"
+
+        # We have internet, try to fetch tags
         available_versions = fetch_github_tags()
         if not available_versions:
-            return "PLEASE CONNECT\nTO INTERNET"
+            # Internet is OK but GitHub fetch failed
+            logging.error("Connected to internet but cannot fetch updates from GitHub")
+            return "UPDATE CHECK\nFAILED"
     current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
     older_versions = [
         v for v in available_versions
@@ -2251,6 +2374,10 @@ def activate_menu_item():
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"
+            elif result == "UPDATE CHECK\nFAILED":
+                duration = 3
+                show_message(result, duration)
+                menu_state = "default"
             else:
                 menu_state = "update_confirm"
         elif selected_option == "DOWNGRADE":
@@ -2260,6 +2387,10 @@ def activate_menu_item():
                 show_message(result, duration)
                 menu_state = "default"
             elif result == "PLEASE CONNECT\nTO INTERNET":
+                duration = 3
+                show_message(result, duration)
+                menu_state = "default"
+            elif result == "UPDATE CHECK\nFAILED":
                 duration = 3
                 show_message(result, duration)
                 menu_state = "default"

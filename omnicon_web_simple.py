@@ -31,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.1.5"  # Fixed omnicon update to restart services instead of reboot
+WEB_GUI_VERSION = "4.1.8"  # Added debug output for GitHub API troubleshooting
 
 # Configuration
 STATE_FILE = "state.json"
@@ -935,22 +935,38 @@ def api_check_omnicon_update():
             current_version = "Unknown"
 
         # Fetch available versions from GitHub
-        try:
-            response = requests.get("https://api.github.com/repos/RUDEWORLD/OMNICON/tags", timeout=10)
-            response.raise_for_status()
-            tags = response.json()
-            available_versions = [tag['name'] for tag in tags]
+        available_versions = []
+        headers_options = [
+            {
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36'
+            },
+            {
+                'User-Agent': 'Omnicon-Updater/4.1.6'
+            },
+            {}  # Try with no headers as last resort
+        ]
 
-            # Get the latest version
-            if available_versions:
-                latest_version = available_versions[0]
-            else:
-                latest_version = current_version
+        for headers in headers_options:
+            try:
+                logging.info(f"Attempting GitHub API with headers: {headers}")
+                response = requests.get("https://api.github.com/repos/RUDEWORLD/OMNICON/tags",
+                                       headers=headers, timeout=15)
+                response.raise_for_status()
+                tags = response.json()
+                available_versions = [tag['name'] for tag in tags]
+                logging.info(f"Successfully fetched {len(tags)} tags")
+                break
+            except Exception as e:
+                logging.error(f"Failed attempt with headers {headers}: {e}")
+                continue
 
-        except Exception as e:
-            logging.error(f"Failed to fetch GitHub tags: {e}")
+        # Get the latest version
+        if available_versions:
+            latest_version = available_versions[0]
+        else:
             latest_version = "Check Failed"
-            available_versions = []
+            logging.error("Failed to fetch any GitHub tags after all attempts")
 
         # Check if update is available
         update_available = False
