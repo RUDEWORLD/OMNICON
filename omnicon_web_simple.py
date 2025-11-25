@@ -31,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.2.5"  # Web GUI now triggers updates via omnicon.py for OLED feedback
+WEB_GUI_VERSION = "4.2.6"  # Web GUI now triggers updates via omnicon.py for OLED feedback
 
 # Configuration
 STATE_FILE = "state.json"
