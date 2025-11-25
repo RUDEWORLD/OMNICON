@@ -856,13 +856,10 @@ function showCompanionUpdate() {
                         </div>
                         <div class="modal-body">
                             <div id="companionUpdateOptions">
-                                <p>Select update type for Companion:</p>
+                                <p>Update Companion to the latest stable version?</p>
                                 <div class="d-grid gap-2">
                                     <button class="btn btn-primary" onclick="updateCompanion('stable')">
                                         <i class="fas fa-shield-alt"></i> Update to Current Stable
-                                    </button>
-                                    <button class="btn btn-warning" onclick="updateCompanion('beta')">
-                                        <i class="fas fa-flask"></i> Update to Current Beta
                                     </button>
                                     <button class="btn btn-secondary" data-bs-dismiss="modal">
                                         <i class="fas fa-times"></i> Cancel
@@ -875,7 +872,7 @@ function showCompanionUpdate() {
                                         <span class="visually-hidden">Updating...</span>
                                     </div>
                                     <p class="mt-3">Updating Companion...</p>
-                                    <p class="text-muted">System will reboot when complete.</p>
+                                    <p class="text-muted">Check OLED for progress. System will reboot when complete.</p>
                                 </div>
                             </div>
                         </div>
@@ -904,13 +901,10 @@ function showSatelliteUpdate() {
                         </div>
                         <div class="modal-body">
                             <div id="satelliteUpdateOptions">
-                                <p>Select update type for Satellite:</p>
+                                <p>Update Satellite to the latest stable version?</p>
                                 <div class="d-grid gap-2">
                                     <button class="btn btn-primary" onclick="updateSatellite('stable')">
                                         <i class="fas fa-shield-alt"></i> Update to Current Stable
-                                    </button>
-                                    <button class="btn btn-warning" onclick="updateSatellite('beta')">
-                                        <i class="fas fa-flask"></i> Update to Current Beta
                                     </button>
                                     <button class="btn btn-secondary" data-bs-dismiss="modal">
                                         <i class="fas fa-times"></i> Cancel
@@ -923,7 +917,7 @@ function showSatelliteUpdate() {
                                         <span class="visually-hidden">Updating...</span>
                                     </div>
                                     <p class="mt-3">Updating Satellite...</p>
-                                    <p class="text-muted">System will reboot when complete.</p>
+                                    <p class="text-muted">Check OLED for progress. System will reboot when complete.</p>
                                 </div>
                             </div>
                         </div>

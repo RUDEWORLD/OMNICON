@@ -31,7 +31,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Version
-WEB_GUI_VERSION = "4.2.2"  # Added debug output for GitHub API troubleshooting
+WEB_GUI_VERSION = "4.2.5"  # Web GUI now triggers updates via omnicon.py for OLED feedback
 
 # Configuration
 STATE_FILE = "state.json"
@@ -1068,51 +1068,18 @@ def api_get_versions():
 @app.route('/api/companion/update', methods=['POST'])
 @login_required
 def api_update_companion():
-    """Update Companion to stable or beta"""
+    """Update Companion to stable version only - triggers via omnicon.py for OLED feedback"""
     try:
-        data = request.get_json()
-        update_type = data.get('type', 'stable')
+        # Send command to omnicon.py so OLED shows update progress
+        success = send_command_to_omnicon('update_companion_stable', {})
 
-        # Create a background thread to run the update
-        def run_update():
-            try:
-                if update_type == 'stable':
-                    # Send up arrow + enter to select stable
-                    cmd = 'echo -e "\\033[A\\n" | sudo companion-update'
-                else:  # beta
-                    # Send just enter to select beta
-                    cmd = 'echo -e "\\n" | sudo companion-update'
-
-                # Run the update command
-                process = subprocess.Popen(cmd, shell=True,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT,
-                                         text=True)
-
-                # Store output for progress tracking
-                output_lines = []
-                for line in iter(process.stdout.readline, ''):
-                    if line:
-                        output_lines.append(line.strip())
-                        logging.info(f"Companion update: {line.strip()}")
-
-                process.wait()
-
-                # After update completes, reboot
-                logging.info("Companion update complete, rebooting...")
-                subprocess.run(['sudo', 'reboot'])
-
-            except Exception as e:
-                logging.error(f"Error in companion update thread: {e}")
-
-        # Start the update in background
-        thread = threading.Thread(target=run_update, daemon=True)
-        thread.start()
-
-        return jsonify({
-            "success": True,
-            "message": f"Starting Companion {update_type} update. System will reboot when complete."
-        })
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Starting Companion stable update. Check OLED for progress. System will reboot when complete."
+            })
+        else:
+            return jsonify({"success": False, "error": "Failed to send update command"}), 500
 
     except Exception as e:
         logging.error(f"Error updating companion: {e}")
@@ -1121,51 +1088,18 @@ def api_update_companion():
 @app.route('/api/satellite/update', methods=['POST'])
 @login_required
 def api_update_satellite():
-    """Update Satellite to stable or beta"""
+    """Update Satellite to stable version only - triggers via omnicon.py for OLED feedback"""
     try:
-        data = request.get_json()
-        update_type = data.get('type', 'stable')
+        # Send command to omnicon.py so OLED shows update progress
+        success = send_command_to_omnicon('update_satellite_stable', {})
 
-        # Create a background thread to run the update
-        def run_update():
-            try:
-                if update_type == 'stable':
-                    # Send up arrow + enter to select stable
-                    cmd = 'echo -e "\\033[A\\n" | sudo satellite-update'
-                else:  # beta
-                    # Send just enter to select beta
-                    cmd = 'echo -e "\\n" | sudo satellite-update'
-
-                # Run the update command
-                process = subprocess.Popen(cmd, shell=True,
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT,
-                                         text=True)
-
-                # Store output for progress tracking
-                output_lines = []
-                for line in iter(process.stdout.readline, ''):
-                    if line:
-                        output_lines.append(line.strip())
-                        logging.info(f"Satellite update: {line.strip()}")
-
-                process.wait()
-
-                # After update completes, reboot
-                logging.info("Satellite update complete, rebooting...")
-                subprocess.run(['sudo', 'reboot'])
-
-            except Exception as e:
-                logging.error(f"Error in satellite update thread: {e}")
-
-        # Start the update in background
-        thread = threading.Thread(target=run_update, daemon=True)
-        thread.start()
-
-        return jsonify({
-            "success": True,
-            "message": f"Starting Satellite {update_type} update. System will reboot when complete."
-        })
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Starting Satellite stable update. Check OLED for progress. System will reboot when complete."
+            })
+        else:
+            return jsonify({"success": False, "error": "Failed to send update command"}), 500
 
     except Exception as e:
         logging.error(f"Error updating satellite: {e}")

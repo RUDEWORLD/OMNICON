@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.2
-# 11/22/2024
+# V4.2.5
+# 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -353,8 +353,8 @@ message_displayed = False
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
 application_menu = ["RUN COMPANION", "RUN SATELLITE", "UPDATE APPS", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
-app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
-app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"]
+app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "", "CANCEL"]
+app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "", "CANCEL"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
@@ -386,8 +386,8 @@ menu_options = {
     "set_time": [],
     "upgrade_select": [],
     "downgrade_select": [],
-    "update_companion": ["UPDATE COMPANION", "CURRENT STABLE", "CURRENT BETA", "CANCEL"],
-    "update_satellite": ["UPDATE SATELLITE", "CURRENT STABLE", "CURRENT BETA", "CANCEL"],
+    "update_companion": ["UPDATE COMPANION", "CURRENT STABLE", "", "CANCEL"],
+    "update_satellite": ["UPDATE SATELLITE", "CURRENT STABLE", "", "CANCEL"],
 
 }
 
@@ -1582,6 +1582,37 @@ def execute_web_commands():
 
             threading.Thread(target=set_dt, daemon=True).start()
 
+        elif command == 'update_companion_stable':
+            # Trigger companion update through OLED menu system
+            logging.info("Triggering Companion stable update via web")
+            if is_connected():
+                show_message("UPDATING\nCOMPANION", 2)
+                global updating_application
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_stable':
+            # Trigger satellite update through OLED menu system
+            logging.info("Triggering Satellite stable update via web")
+            if is_connected():
+                show_message("UPDATING\nSATELLITE", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
     except Exception as e:
         logging.error(f"Error executing web command: {e}")
 
@@ -1727,6 +1758,37 @@ def execute_web_commands():
 
             threading.Thread(target=set_dt, daemon=True).start()
 
+        elif command == 'update_companion_stable':
+            # Trigger companion update through OLED menu system
+            logging.info("Triggering Companion stable update via web")
+            if is_connected():
+                show_message("UPDATING\nCOMPANION", 2)
+                global updating_application
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_stable':
+            # Trigger satellite update through OLED menu system
+            logging.info("Triggering Satellite stable update via web")
+            if is_connected():
+                show_message("UPDATING\nSATELLITE", 2)
+                updating_application = True
+                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
     except Exception as e:
         logging.error(f"Error executing web command: {e}")
 
@@ -2100,6 +2162,35 @@ def process_web_commands():
                             menu_selection = 0
                             update_oled_display()
                             logging.info(f"Navigated to {target_menu} menu via web")
+
+                    elif command == 'update_companion_stable':
+                        # Trigger companion update through OLED menu system
+                        logging.info("Triggering Companion stable update via web")
+                        if is_connected():
+                            show_message("UPDATING\nCOMPANION", 2)
+                            global updating_application
+                            updating_application = True
+                            execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
+
+                    elif command == 'update_satellite_stable':
+                        # Trigger satellite update through OLED menu system
+                        logging.info("Triggering Satellite stable update via web")
+                        if is_connected():
+                            show_message("UPDATING\nSATELLITE", 2)
+                            updating_application = True
+                            execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
                     # Remove command file after processing
                     os.remove(web_command_file)
@@ -2317,18 +2408,6 @@ def activate_menu_item():
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
-        elif selected_option == "CURRENT BETA":
-            if is_connected():
-                show_message("UPDATING\nCOMPANION", 2)
-                updating_application = True
-                execute_command_with_progress('echo -e "\\n" | sudo companion-update')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
         elif selected_option == "CANCEL":
             menu_state = "app_updates"
             menu_selection = 0
@@ -2339,18 +2418,6 @@ def activate_menu_item():
                 show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
                 execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-        elif selected_option == "CURRENT BETA":
-            if is_connected():
-                show_message("UPDATING\nSATELLITE", 2)
-                updating_application = True
-                execute_command_with_progress('echo -e "\\n" | sudo satellite-update')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
