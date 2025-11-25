@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.6
+# V4.2.8
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -482,13 +482,14 @@ def clear_display():
     draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
 
 # Function to update OLED display
-def update_oled_display():
+def update_oled_display(force=False):
     global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr, message_displayed, selected_version
     global companion_version, satellite_version  # Declare as global to modify them
     current_time = time.time()
     if message_displayed or updating_application:
         return
-    if not update_flag or (current_time - last_update_time) < LOOPTIME:
+    # Skip LOOPTIME throttle when force=True (e.g., button presses)
+    if not force and (not update_flag or (current_time - last_update_time) < LOOPTIME):
         return
     update_flag = False
     last_update_time = current_time
@@ -812,7 +813,7 @@ def reset_to_main():
         gateway = original_gateway[:]
         datetime_temp = get_system_time()
         ip_octet = 0  # Reset IP octet position
-        update_oled_display()
+        update_oled_display(force=True)
         timeout_flag = True
 
 # Debounce decorator for button event handlers
@@ -855,7 +856,7 @@ def button_k1_pressed():
     else:
         menu_selection = 0
         activate_menu_item()
-    update_oled_display()
+    update_oled_display(force=True)
 
 @debounce
 def button_k2_pressed():
@@ -889,7 +890,7 @@ def button_k2_pressed():
     else:
         menu_selection = 1
         activate_menu_item()
-    update_oled_display()
+    update_oled_display(force=True)
 
 @debounce
 def button_k3_pressed():
@@ -918,7 +919,7 @@ def button_k3_pressed():
         # Only call activate_menu_item for normal menus with selectable options
         menu_selection = 2
         activate_menu_item()
-    update_oled_display()
+    update_oled_display(force=True)
 
 @debounce
 def button_k4_pressed():
@@ -955,8 +956,8 @@ def button_k4_pressed():
     else:
         menu_selection = 3
         activate_menu_item()
-    update_oled_display()
-    
+    update_oled_display(force=True)
+
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version, timeout_flag
     logging.debug("K3 held for 1 seconds")
@@ -970,7 +971,7 @@ def hold_k3():
         menu_state = "set_static"
     elif menu_state in ["set_date", "set_time"]:
         menu_state = "set_datetime"
-    update_oled_display()  # Ensure display updates after state change
+    update_oled_display(force=True)  # Ensure display updates after state change
 
 
 def hold_k4():
@@ -986,7 +987,7 @@ def hold_k4():
         original_subnet_mask = subnet_mask[:]
         original_gateway = gateway[:]
         menu_state = "set_static"
-        update_oled_display()  # Ensure display updates after state change
+        update_oled_display(force=True)  # Ensure display updates after state change
     elif menu_state in ["set_date", "set_time"]:
         set_system_datetime(datetime_temp)
         state = load_state()
@@ -996,7 +997,7 @@ def hold_k4():
         # Go back to the main menu after setting date/time
         menu_state = "default"
         menu_selection = 0
-        update_oled_display()
+        update_oled_display(force=True)
 
 
 def save_static_settings():
@@ -1426,12 +1427,18 @@ def perform_downgrade(version):
 
 # Update OLED display in a separate thread
 def update_oled():
+    import math
+    # Start at the next full second boundary
+    next_second = math.floor(time.time()) + 1
     while True:
-        # Wait for the start of the next second
-        now = get_system_time()
-        sleep_time = 1 - now.microsecond / 1_000_000
-        time.sleep(sleep_time)
+        # Sleep until the next absolute second boundary
+        now = time.time()
+        sleep_time = next_second - now
+        if sleep_time > 0:
+            time.sleep(sleep_time)
         update_oled_display()
+        # Always advance by exactly 1 second to prevent drift
+        next_second += 1
 
 
 
