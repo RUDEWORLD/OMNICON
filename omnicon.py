@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.8
+# V4.2.9
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -318,6 +318,8 @@ draw = ImageDraw.Draw(image)
 draw.rectangle((0, 0, oled.width, oled.height), outline=255, fill=255)
 
 # Load fonts
+font7 = ImageFont.truetype('DejaVuSans.ttf', 7)
+font9 = ImageFont.truetype('DejaVuSans.ttf', 9)
 font10 = ImageFont.truetype('DejaVuSans.ttf', 10)
 font11 = ImageFont.truetype('DejaVuSans.ttf', 11)
 font12 = ImageFont.truetype('DejaVuSans.ttf', 12)
@@ -541,13 +543,14 @@ def update_oled_display(force=False):
             title_x = (oled.width - (title_bbox[2] - title_bbox[0])) // 2
 
             # Pi Stats Display
-            local_draw.text((0, 0), f"{title}", font=font12, fill=255)
-            local_draw.text((90, 0), EthProfile, font=font11, fill=255)
-            local_draw.text((0, 16), IP, font=font11, fill=255)
-            local_draw.text((95, 16), port, font=font11, fill=255)
-            local_draw.text((0, 32), f"{current_time_str}", font=font12, fill=255)
-            local_draw.text((90, 32), Temp, font=font11, fill=255)
-            local_draw.text((0, 48), "omniconpro.com / help", font=font11, fill=255)
+            local_draw.text((0, 0), f"{title}", font=font9, fill=255)
+            local_draw.text((95, 0), EthProfile, font=font9, fill=255)
+            local_draw.text((0, 12), IP, font=font11, fill=255)
+            local_draw.text((95, 12), port, font=font11, fill=255)
+            local_draw.text((0, 26), f"{current_time_str}", font=font11, fill=255)
+            local_draw.text((92, 26), Temp, font=font11, fill=255)
+            local_draw.text((22, 39), f"Omnicon {current_version}", font=font11, fill=255)
+            local_draw.text((6, 54), "OMNICONPRO.COM / HELP", font=font9, fill=255)
 
         elif menu_state == "application":
             # Refresh versions

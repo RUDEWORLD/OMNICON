@@ -30,8 +30,21 @@ CORS(app)
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Version
-WEB_GUI_VERSION = "4.2.8"  # Web GUI now triggers updates via omnicon.py for OLED feedback
+# Version - read from omnicon.py header
+def get_omnicon_version():
+    """Get version from omnicon.py header comment"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        omnicon_path = os.path.join(script_dir, 'omnicon.py')
+        with open(omnicon_path, 'r') as f:
+            for line in f:
+                if line.startswith("# V"):
+                    return line.strip().split(' ')[1]
+    except Exception as e:
+        logging.error(f"Error reading omnicon.py version: {e}")
+    return "Unknown"
+
+WEB_GUI_VERSION = get_omnicon_version()
 
 # Configuration
 STATE_FILE = "state.json"
@@ -71,6 +84,11 @@ def login_required(f):
         # Login disabled - always allow access
         return f(*args, **kwargs)
     return decorated_function
+
+@app.context_processor
+def inject_version():
+    """Inject version into all templates"""
+    return dict(app_version=WEB_GUI_VERSION)
 
 def load_state():
     """Load system state from omnicon.py's state file"""
