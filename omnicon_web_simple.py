@@ -1037,7 +1037,29 @@ def api_check_omnicon_update():
 
         # Fetch available versions from GitHub
         available_versions = []
-        headers_options = [
+
+        # Load GitHub token if available
+        github_token = None
+        try:
+            config_path = '/home/omnicon/OLED_Stats/config.json'
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    github_token = config.get('github_token', '').strip()
+                    if github_token:
+                        logging.info("GitHub token loaded for API request")
+        except Exception as e:
+            logging.warning(f"Could not load GitHub token: {e}")
+
+        # Build headers - use token if available for higher rate limits
+        headers_options = []
+        if github_token:
+            headers_options.append({
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'Omnicon-Updater/4.2',
+                'Authorization': f'token {github_token}'
+            })
+        headers_options.extend([
             {
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36'
@@ -1046,11 +1068,11 @@ def api_check_omnicon_update():
                 'User-Agent': 'Omnicon-Updater/4.2.2'
             },
             {}  # Try with no headers as last resort
-        ]
+        ])
 
         for headers in headers_options:
             try:
-                logging.info(f"Attempting GitHub API with headers: {headers}")
+                logging.info(f"Attempting GitHub API with headers: {list(headers.keys())}")
                 response = requests.get("https://api.github.com/repos/RUDEWORLD/OMNICON/tags",
                                        headers=headers, timeout=15)
                 response.raise_for_status()
@@ -1059,7 +1081,7 @@ def api_check_omnicon_update():
                 logging.info(f"Successfully fetched {len(tags)} tags")
                 break
             except Exception as e:
-                logging.error(f"Failed attempt with headers {headers}: {e}")
+                logging.error(f"Failed attempt: {e}")
                 continue
 
         # Get the latest version

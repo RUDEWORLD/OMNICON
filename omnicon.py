@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.031
+# V4.2.033
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1335,7 +1335,7 @@ def download_and_extract_zip_from_github(tag, extract_to):
 def load_github_token():
     """Load GitHub token from config file if available."""
     try:
-        config_path = '/home/pi/OLED_Stats_pi/config.json'
+        config_path = '/home/omnicon/OLED_Stats/config.json'
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 config = json.load(f)
