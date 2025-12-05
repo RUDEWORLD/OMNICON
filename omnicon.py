@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.030
+# V4.2.031
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1446,7 +1446,8 @@ def fetch_github_tags():
 def update_omnicon():
     global available_versions, current_version, selected_version
     selected_version = None  # Initialize selected_version to None
-    print(f"DEBUG: update_omnicon called, available_versions = {available_versions}")
+    available_versions = []  # Clear cache to always fetch fresh versions
+    print(f"DEBUG: update_omnicon called, fetching fresh versions...")
     logging.info(f"update_omnicon called, current version = {current_version}")
 
     if not available_versions:
@@ -1493,6 +1494,7 @@ def perform_update(version):
 def downgrade_omnicon():
     global available_versions, current_version, selected_version
     selected_version = None  # Initialize selected_version to None
+    available_versions = []  # Clear cache to always fetch fresh versions
     if not available_versions:
         # First check if we have internet
         if not is_connected():
