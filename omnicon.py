@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.029
+# V4.2.030
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -206,6 +206,56 @@ def save_state(state):
 def execute_command(command):
     subprocess.run(command, shell=True)
 
+# Function to setup port 80 to 8080 redirect using nftables
+def setup_port_redirect():
+    """Configure nftables to redirect port 80 to 8080 for web GUI access without port number"""
+    nftables_conf = "/etc/nftables.conf"
+    nftables_content = """#!/usr/sbin/nft -f
+
+flush ruleset
+
+table ip nat {
+\tchain prerouting {
+\t\ttype nat hook prerouting priority dstnat; policy accept;
+\t\ttcp dport 80 redirect to :8080
+\t}
+}
+"""
+    try:
+        # Check if nftables.conf already has the correct content
+        needs_update = True
+        try:
+            with open(nftables_conf, 'r') as f:
+                current_content = f.read()
+                if 'tcp dport 80 redirect to :8080' in current_content and 'flush ruleset' in current_content:
+                    needs_update = False
+                    logging.debug("Port 80 redirect already configured")
+        except FileNotFoundError:
+            pass
+
+        if needs_update:
+            logging.info("Setting up port 80 to 8080 redirect...")
+            # Write the nftables config
+            result = subprocess.run(
+                ['sudo', 'tee', nftables_conf],
+                input=nftables_content,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                logging.error(f"Failed to write nftables config: {result.stderr}")
+                return
+
+            # Enable and restart nftables service
+            subprocess.run(['sudo', 'systemctl', 'enable', 'nftables'], capture_output=True)
+            subprocess.run(['sudo', 'systemctl', 'restart', 'nftables'], capture_output=True)
+            logging.info("Port 80 redirect configured successfully")
+        else:
+            # Ensure nftables service is running even if config exists
+            subprocess.run(['sudo', 'systemctl', 'start', 'nftables'], capture_output=True)
+    except Exception as e:
+        logging.error(f"Failed to setup port redirect: {e}")
+
 # Function to check if a service is active
 def is_service_active(service_name):
     result = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True)
@@ -240,6 +290,9 @@ def switch_network_profile(new_profile):
             logging.info(f"Failed to switch to {new_profile} profile")
 
 def initial_setup():
+    # Setup port 80 redirect for web GUI access without port number
+    setup_port_redirect()
+
     state = load_state()
 
     # Ensure only one service is active at startup
