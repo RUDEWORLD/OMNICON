@@ -407,13 +407,35 @@ def api_set_static():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+def get_fresh_system_time():
+    """Get current system time with fresh timezone info"""
+    import time as time_module
+    import os
+
+    # Force timezone reload by clearing environment and calling tzset
+    if 'TZ' in os.environ:
+        del os.environ['TZ']
+    time_module.tzset()
+
+    # Use subprocess to get the actual system time (most reliable)
+    try:
+        result = subprocess.run(['date', '+%Y-%m-%d %H:%M:%S'],
+                              capture_output=True, text=True, check=True)
+        date_str = result.stdout.strip()
+        # Parse: YYYY-MM-DD HH:MM:SS
+        return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        logging.warning(f"Failed to get system time via subprocess: {e}")
+        # Fallback to datetime.now() after tzset
+        return datetime.now()
+
 @app.route('/api/datetime', methods=['GET', 'POST'])
 @login_required
 def api_datetime():
     """Get or set system date/time via omnicon.py"""
     if request.method == 'GET':
         state = load_state()
-        current_time = datetime.now()
+        current_time = get_fresh_system_time()
 
         # Get current timezone - prioritize file system sources over timedatectl
         # (timedatectl can be out of sync after changes via raspi-config)
@@ -612,6 +634,9 @@ def api_set_timezone():
                 except:
                     pass  # Not critical if this fails
 
+                # Notify omnicon.py to reload timezone so OLED updates immediately
+                send_command_to_omnicon('reload_timezone', {})
+
                 return jsonify({"success": True, "message": f"Timezone set to {timezone}"})
             else:
                 error_msg = result.stderr or "Failed to set timezone"
@@ -686,6 +711,64 @@ def api_rtc_check():
         return jsonify({"success": False, "error": "Command timed out"}), 500
     except Exception as e:
         logging.error(f"Error checking RTC: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/ntp/sync', methods=['POST'])
+@login_required
+def api_ntp_sync():
+    """Sync system time from NTP server"""
+    try:
+        # First check if we have internet connectivity
+        try:
+            import socket
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+        except OSError:
+            return jsonify({"success": False, "error": "No internet connection"}), 400
+
+        # Enable NTP and force sync
+        # First enable NTP
+        result = subprocess.run(
+            ["sudo", "timedatectl", "set-ntp", "true"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr or "Failed to enable NTP"
+            logging.error(f"Failed to enable NTP: {error_msg}")
+            return jsonify({"success": False, "error": error_msg}), 500
+
+        # Force an immediate sync by restarting systemd-timesyncd
+        subprocess.run(
+            ["sudo", "systemctl", "restart", "systemd-timesyncd"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        # Wait a moment for sync to complete
+        import time
+        time.sleep(2)
+
+        # Also sync the hardware clock with the new time
+        subprocess.run(
+            ["sudo", "hwclock", "--systohc"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        # Notify omnicon.py to reload timezone/time
+        send_command_to_omnicon('reload_timezone', {})
+
+        logging.info("NTP time sync completed successfully")
+        return jsonify({"success": True, "message": "Time synced from NTP server"})
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "error": "Command timed out"}), 500
+    except Exception as e:
+        logging.error(f"Error syncing NTP: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/system/power', methods=['POST'])
@@ -990,8 +1073,8 @@ def api_check_omnicon_update():
         update_available = False
         if current_version != "Unknown" and latest_version != "Check Failed":
             try:
-                current_tuple = tuple(map(int, current_version.strip('V').split('.')))
-                latest_tuple = tuple(map(int, latest_version.strip('V').split('.')))
+                current_tuple = tuple(map(int, current_version.lstrip('vV').split('.')))
+                latest_tuple = tuple(map(int, latest_version.lstrip('vV').split('.')))
                 update_available = latest_tuple > current_tuple
             except:
                 pass
@@ -1278,17 +1361,39 @@ if False:  # SOCKETIO_AVAILABLE disabled
             if command:
                 terminal.write(command + '\n')
 
+def can_bind_to_port(port):
+    """Test if we can bind to a specific port"""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', port))
+        sock.close()
+        return True
+    except (PermissionError, OSError):
+        return False
+
 if __name__ == '__main__':
     config = load_config()
 
     print("======================================")
     print(f"Omnicon Web GUI v{WEB_GUI_VERSION} - Remote Control")
     print("======================================")
-    print(f"Starting on port {config.get('port', 8080)}")
     print("This web GUI acts as a remote control for omnicon.py")
     print("Now with integrated terminal for updates!")
     print("")
 
-    # Run Flask app
+    # Run Flask app - try port 80 first, fallback to 8080
     print("Running with simple terminal")
-    app.run(host='0.0.0.0', port=config.get('port', 8080), debug=False)
+
+    # Try port 80 first (requires root/sudo), fallback to 8080
+    primary_port = 80
+    fallback_port = config.get('port', 8080)
+
+    # Test if we can bind to port 80 before trying
+    if can_bind_to_port(primary_port):
+        print(f"Starting on port {primary_port}...")
+        app.run(host='0.0.0.0', port=primary_port, debug=False)
+    else:
+        print(f"Port {primary_port} unavailable (requires root or in use), using port {fallback_port}")
+        app.run(host='0.0.0.0', port=fallback_port, debug=False)

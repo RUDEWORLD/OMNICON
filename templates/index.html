@@ -49,8 +49,11 @@
                         </button>
                     </div>
                 </div>
-                <div class="alert alert-info mt-3 mb-0">
-                    <small><i class="fas fa-info-circle"></i> Click to activate the selected service</small>
+                <button class="btn btn-info w-100 mt-3" id="openGuiBtn" onclick="openActiveServiceGui()" style="display: none;">
+                    <i class="fas fa-external-link-alt"></i> <span id="openGuiBtnText">Open GUI</span>
+                </button>
+                <div class="alert alert-secondary mt-3 mb-0" id="noServiceAlert">
+                    <small><i class="fas fa-info-circle"></i> Click above to activate a service</small>
                 </div>
             </div>
         </div>
@@ -105,7 +108,7 @@
                     </button>
                     <div class="mt-2 text-center">
                         <small class="text-muted">
-                            Current Omnicon: <span id="currentOmniconVersion">--</span> |
+                            Current: <span id="currentOmniconVersion">--</span><br>
                             Available: <span id="availableOmniconVersion">--</span>
                         </small>
                     </div>
@@ -152,15 +155,24 @@
                 </div>
 
                 <div class="d-grid gap-2">
-                    <button class="btn btn-secondary" onclick="showDateTimeConfig()">
-                        <i class="fas fa-calendar-alt"></i> Set Date & Time
-                    </button>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <button class="btn btn-secondary w-100" onclick="showDateTimeConfig()">
+                                <i class="fas fa-calendar-alt"></i> Set Date/Time
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button class="btn btn-success w-100" onclick="syncNTP()">
+                                <i class="fas fa-cloud-download-alt"></i> Sync NTP
+                            </button>
+                        </div>
+                    </div>
                     <button class="btn btn-info" onclick="showTimezoneConfig()">
                         <i class="fas fa-globe"></i> Change Timezone
                     </button>
                     <div class="btn-group w-100 mt-2" role="group">
                         <button class="btn btn-outline-warning" onclick="syncRTC()">
-                            <i class="fas fa-sync"></i> Sync Pi RTC
+                            <i class="fas fa-sync"></i> Set RTC
                         </button>
                         <button class="btn btn-outline-primary" onclick="checkRTC()">
                             <i class="fas fa-clock"></i> Check RTC

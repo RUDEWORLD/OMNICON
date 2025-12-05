@@ -57,20 +57,33 @@ function loadSystemInfo() {
 function updateSystemInfoDisplay(data) {
     let html = '<div class="system-info">';
 
-    // Service status
+    // Service status and Open GUI button
     if (data.active_service === 'companion') {
         $('#companionBtn').addClass('active');
         $('#satelliteBtn').removeClass('active');
         $('#companionStatus').html('<small class="badge bg-success">Active</small>');
         $('#satelliteStatus').html('<small class="badge bg-secondary">Inactive</small>');
+        // Show Open GUI button for Companion
+        $('#openGuiBtn').show();
+        $('#openGuiBtnText').text('Open Companion GUI');
+        $('#openGuiBtn').data('port', 8000);
+        $('#noServiceAlert').hide();
     } else if (data.active_service === 'satellite') {
         $('#satelliteBtn').addClass('active');
         $('#companionBtn').removeClass('active');
         $('#satelliteStatus').html('<small class="badge bg-success">Active</small>');
         $('#companionStatus').html('<small class="badge bg-secondary">Inactive</small>');
+        // Show Open GUI button for Satellite
+        $('#openGuiBtn').show();
+        $('#openGuiBtnText').text('Open Satellite GUI');
+        $('#openGuiBtn').data('port', 9999);
+        $('#noServiceAlert').hide();
     } else {
         $('#companionBtn, #satelliteBtn').removeClass('active');
         $('#companionStatus, #satelliteStatus').html('<small class="badge bg-secondary">Inactive</small>');
+        // Hide Open GUI button when no service is active
+        $('#openGuiBtn').hide();
+        $('#noServiceAlert').show();
     }
 
     // System stats
@@ -212,6 +225,16 @@ function toggleService(service) {
             btn.removeClass('updating');
         }
     });
+}
+
+// Open the GUI for the currently active service in a new tab
+function openActiveServiceGui() {
+    const port = $('#openGuiBtn').data('port');
+    if (port) {
+        // Use current hostname/IP to build the URL
+        const url = `http://${window.location.hostname}:${port}`;
+        window.open(url, '_blank');
+    }
 }
 
 // Set network mode
@@ -362,9 +385,16 @@ function checkOmniconVersion() {
     $.ajax({
         url: '/api/omnicon/check_update',
         method: 'GET',
+        timeout: 10000,
         success: function(data) {
             $('#currentOmniconVersion').text(data.current_version || '--');
-            $('#availableOmniconVersion').text(data.latest_version || '--');
+
+            // Show latest available version or network required message
+            if (data.latest_version && data.latest_version !== "Check Failed") {
+                $('#availableOmniconVersion').text(data.latest_version);
+            } else {
+                $('#availableOmniconVersion').text('(Network Required)');
+            }
 
             // Store data globally for modal use
             window.omniconUpdateData = data;
@@ -372,7 +402,7 @@ function checkOmniconVersion() {
         error: function(xhr) {
             console.error('Failed to check Omnicon version:', xhr);
             $('#currentOmniconVersion').text('Error');
-            $('#availableOmniconVersion').text('Error');
+            $('#availableOmniconVersion').text('(Network Required)');
         }
     });
 }
@@ -492,9 +522,9 @@ function loadDateTime() {
         cache: false,  // Force refresh from server
         timeout: 800,  // Short timeout since we're calling every second
         success: function(data) {
-            const date = new Date(data.datetime);
-            $('#currentDate').text(date.toLocaleDateString());
-            $('#currentTime').text(date.toLocaleTimeString());
+            // Use server-provided date and time directly (already in correct timezone)
+            $('#currentDate').text(data.date);
+            $('#currentTime').text(data.time);
 
             // Only update timezone if it changed (less DOM updates)
             const currentTz = $('#currentTimezone').text();
@@ -518,12 +548,30 @@ function loadDateTime() {
 
 // Show date/time configuration modal
 function showDateTimeConfig() {
-    const now = new Date();
-    $('#setDate').val(now.toISOString().split('T')[0]);
-    $('#setTime').val(now.toTimeString().split(' ')[0]);
+    // Fetch fresh time from server (not browser time)
+    $.ajax({
+        url: '/api/datetime',
+        method: 'GET',
+        cache: false,
+        success: function(data) {
+            // Use server-provided date and time
+            $('#setDate').val(data.date);
+            $('#setTime').val(data.time);
+            $('#format24hr').prop('checked', data.format_24hr);
 
-    const modal = new bootstrap.Modal(document.getElementById('dateTimeModal'));
-    modal.show();
+            const modal = new bootstrap.Modal(document.getElementById('dateTimeModal'));
+            modal.show();
+        },
+        error: function() {
+            // Fallback to browser time if server request fails
+            const now = new Date();
+            $('#setDate').val(now.toISOString().split('T')[0]);
+            $('#setTime').val(now.toTimeString().split(' ')[0]);
+
+            const modal = new bootstrap.Modal(document.getElementById('dateTimeModal'));
+            modal.show();
+        }
+    });
 }
 
 // Save date/time settings
@@ -666,7 +714,32 @@ function showTimezoneModal() {
     const timezones = window.timezoneData.available_timezones || [];
     const currentTz = window.timezoneData.timezone || 'UTC';
 
+    // Store all timezones for filtering
+    window.allTimezones = timezones;
+
     // Populate timezone select
+    populateTimezoneSelect(timezones, currentTz);
+
+    $('#modalCurrentTz').text(currentTz);
+
+    // Set up search functionality - filter by rebuilding the list
+    $('#timezoneSearch').off('input').on('input', function() {
+        const searchTerm = $(this).val().toLowerCase();
+        const filtered = window.allTimezones.filter(tz =>
+            tz.toLowerCase().includes(searchTerm)
+        );
+        populateTimezoneSelect(filtered, currentTz);
+    });
+
+    // Clear search when modal opens
+    $('#timezoneSearch').val('');
+
+    const modal = new bootstrap.Modal(document.getElementById('timezoneModal'));
+    modal.show();
+}
+
+// Helper function to populate timezone select
+function populateTimezoneSelect(timezones, currentTz) {
     const select = $('#timezoneSelect');
     select.empty();
 
@@ -677,24 +750,6 @@ function showTimezoneModal() {
         }
         select.append(option);
     });
-
-    $('#modalCurrentTz').text(currentTz);
-
-    // Set up search functionality
-    $('#timezoneSearch').off('input').on('input', function() {
-        const searchTerm = $(this).val().toLowerCase();
-        $('#timezoneSelect option').each(function() {
-            const tzName = $(this).text().toLowerCase();
-            if (tzName.includes(searchTerm)) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
-    });
-
-    const modal = new bootstrap.Modal(document.getElementById('timezoneModal'));
-    modal.show();
 }
 
 // Debug timezone detection
@@ -778,6 +833,34 @@ function saveTimezone() {
     });
 }
 
+// Sync time from NTP server
+function syncNTP() {
+    if (!confirm('Sync date and time from NTP server?\n\nThis requires an internet connection.')) {
+        return;
+    }
+
+    showToast('Info', 'Syncing time from NTP server...', 'info');
+
+    $.ajax({
+        url: '/api/ntp/sync',
+        method: 'POST',
+        success: function(data) {
+            if (data.success) {
+                showToast('Success', 'Time synced from NTP server', 'success');
+                // Reload date/time display
+                setTimeout(loadDateTime, 1000);
+            } else {
+                showToast('Error', data.error || 'Failed to sync NTP', 'error');
+            }
+        },
+        error: function(xhr) {
+            console.error('NTP sync failed:', xhr);
+            const errorMsg = xhr.responseJSON?.error || 'Failed to sync NTP. Check internet connection.';
+            showToast('Error', errorMsg, 'error');
+        }
+    });
+}
+
 // Sync RTC with system time
 function syncRTC() {
     if (!confirm('Sync RTC with current system time?')) {
@@ -840,6 +923,9 @@ function loadApplicationVersions() {
             console.error('Failed to load versions:', xhr);
         }
     });
+
+    // Also check for available Omnicon version from GitHub
+    checkOmniconVersion();
 }
 
 // Show Companion update options

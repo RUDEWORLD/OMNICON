@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.9
+# V4.2.029
 # 11/25/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -342,11 +342,11 @@ original_subnet_mask = subnet_mask[:]
 original_gateway = gateway[:]
 
 blink_state = True
-last_interaction_time = time.time()
+last_interaction_time = time.monotonic()  # Use monotonic for timeout tracking (immune to time changes)
 timeout_flag = False
 update_flag = True
 debounce_time = 0.05  # Debounce time for button presses
-last_update_time = time.time()  # Initialize the last update time
+last_update_time = time.monotonic()  # Initialize the last update time (monotonic to handle time changes)
 
 # Global flag to indicate message display
 message_displayed = False
@@ -487,14 +487,15 @@ def clear_display():
 def update_oled_display(force=False):
     global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr, message_displayed, selected_version
     global companion_version, satellite_version  # Declare as global to modify them
-    current_time = time.time()
+    # Use monotonic time for throttle check (not affected by system time changes)
+    current_monotonic = time.monotonic()
     if message_displayed or updating_application:
         return
     # Skip LOOPTIME throttle when force=True (e.g., button presses)
-    if not force and (not update_flag or (current_time - last_update_time) < LOOPTIME):
+    if not force and (not update_flag or (current_monotonic - last_update_time) < LOOPTIME):
         return
     update_flag = False
-    last_update_time = current_time
+    last_update_time = current_monotonic
     logging.debug("Updating OLED display")
 
     with oled_lock:
@@ -549,7 +550,11 @@ def update_oled_display(force=False):
             local_draw.text((95, 12), port, font=font11, fill=255)
             local_draw.text((0, 26), f"{current_time_str}", font=font11, fill=255)
             local_draw.text((92, 26), Temp, font=font11, fill=255)
-            local_draw.text((22, 39), f"Omnicon {current_version}", font=font11, fill=255)
+            # Center the version text horizontally
+            version_text = f"Omnicon {current_version}"
+            version_bbox = local_draw.textbbox((0, 0), version_text, font=font11)
+            version_x = (oled.width - (version_bbox[2] - version_bbox[0])) // 2
+            local_draw.text((version_x, 39), version_text, font=font11, fill=255)
             local_draw.text((6, 54), "OMNICONPRO.COM / HELP", font=font9, fill=255)
 
         elif menu_state == "application":
@@ -639,21 +644,26 @@ def update_oled_display(force=False):
 
         elif menu_state == "set_time":
             time_format_display = "24hr" if time_format_24hr else "12hr"
-            time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
+            time_display = datetime_temp.strftime("%H:%M:%S" if time_format_24hr else "%I:%M:%S")
             am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
 
             if blink_state:
                 if ip_octet == 0:
                     time_format_display = f"[{time_format_display}]"
                 elif ip_octet == 1:
+                    # Hours: [HH]:MM:SS
                     time_display = f"[{time_display[:2]}]{time_display[2:]}"
                 elif ip_octet == 2:
-                    time_display = f"{time_display[:3]}[{time_display[3:]}]"
-                elif ip_octet == 3 and not time_format_24hr:
+                    # Minutes: HH:[MM]:SS
+                    time_display = f"{time_display[:3]}[{time_display[3:5]}]{time_display[5:]}"
+                elif ip_octet == 3:
+                    # Seconds: HH:MM:[SS]
+                    time_display = f"{time_display[:6]}[{time_display[6:]}]"
+                elif ip_octet == 4 and not time_format_24hr:
                     am_pm_display = f"[{am_pm_display}]"
             else:
                 time_format_display = "24hr" if time_format_24hr else "12hr"
-                time_display = datetime_temp.strftime("%H:%M" if time_format_24hr else "%I:%M")
+                time_display = datetime_temp.strftime("%H:%M:%S" if time_format_24hr else "%I:%M:%S")
                 am_pm_display = datetime_temp.strftime("%p") if not time_format_24hr else ""
 
             local_draw.text((0, 0), "          SET TIME", font=font12, fill=255)
@@ -822,7 +832,8 @@ def reset_to_main():
 # Debounce decorator for button event handlers
 def debounce(func):
     def wrapper(*args, **kwargs):
-        current_time = time.time()
+        # Use monotonic time for debounce (not affected by system time changes)
+        current_time = time.monotonic()
         if current_time - wrapper.last_called >= debounce_time:
             func(*args, **kwargs)
             wrapper.last_called = current_time
@@ -834,7 +845,7 @@ def debounce(func):
 def button_k1_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     logging.debug("K1 pressed")
-    last_interaction_time = time.time()
+    last_interaction_time = time.monotonic()
     timeout_flag = False
 
     if menu_state in ["show_network_info", "show_pi_health"]:
@@ -865,7 +876,7 @@ def button_k1_pressed():
 def button_k2_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     logging.debug("K2 pressed")
-    last_interaction_time = time.time()
+    last_interaction_time = time.monotonic()
     timeout_flag = False
 
     if menu_state in ["show_network_info", "show_pi_health"]:
@@ -899,7 +910,7 @@ def button_k2_pressed():
 def button_k3_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
     logging.debug("K3 pressed")
-    last_interaction_time = time.time()
+    last_interaction_time = time.monotonic()
     timeout_flag = False
 
     if menu_state in ["show_network_info", "show_pi_health"]:
@@ -910,9 +921,13 @@ def button_k3_pressed():
         # Move to the app updates menu when K3 is pressed in application menu
         menu_state = "app_updates"
         menu_selection = 0
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
-        ip_octet = (ip_octet - 1) % 4  # Corrected to allow all 4 octets
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date"]:
+        ip_octet = (ip_octet - 1) % 4  # 4 octets for IP/date
         # Don't call activate_menu_item for these special editing screens
+    elif menu_state == "set_time":
+        # Time has: format, hours, minutes, seconds (+ AM/PM for 12hr)
+        max_octet = 5 if not time_format_24hr else 4
+        ip_octet = (ip_octet - 1) % max_octet
     elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Cancel action
         menu_state = "update"
@@ -930,14 +945,18 @@ def button_k4_pressed():
     global original_ip_address, original_subnet_mask, original_gateway
     global datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
     logging.debug("K4 pressed")
-    last_interaction_time = time.time()
+    last_interaction_time = time.monotonic()
     timeout_flag = False  # Reset timeout flag
 
     if menu_state in ["show_network_info", "show_pi_health"]:
         reset_to_main()
-    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date", "set_time"]:
-        ip_octet = (ip_octet + 1) % 4  # Corrected to allow all 4 octets
+    elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date"]:
+        ip_octet = (ip_octet + 1) % 4  # 4 octets for IP/date
         # Don't call activate_menu_item for these special editing screens
+    elif menu_state == "set_time":
+        # Time has: format, hours, minutes, seconds (+ AM/PM for 12hr)
+        max_octet = 5 if not time_format_24hr else 4
+        ip_octet = (ip_octet + 1) % max_octet
     elif menu_state == "update_confirm":
         if selected_version:
             result = perform_update(selected_version)
@@ -964,7 +983,7 @@ def button_k4_pressed():
 def hold_k3():
     global menu_state, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, selected_version, timeout_flag
     logging.debug("K3 held for 1 seconds")
-    last_interaction_time = time.time()
+    last_interaction_time = time.monotonic()
     timeout_flag = False  # Reset timeout flag to ensure buttons remain responsive
 
     if menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
@@ -979,8 +998,8 @@ def hold_k3():
 
 def hold_k4():
     global menu_state, updating_application, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
-    logging.debug("K4 held for 1 seconds")
-    last_interaction_time = time.time()
+    logging.info(f"K4 held - menu_state: {menu_state}")
+    last_interaction_time = time.monotonic()
     timeout_flag = False  # Reset timeout flag to ensure buttons remain responsive
 
     if menu_state in ["set_static_ip", "set_static_sm", "set_static_gw"]:
@@ -992,12 +1011,22 @@ def hold_k4():
         menu_state = "set_static"
         update_oled_display(force=True)  # Ensure display updates after state change
     elif menu_state in ["set_date", "set_time"]:
-        set_system_datetime(datetime_temp)
-        state = load_state()
-        state["time_format_24hr"] = time_format_24hr
-        save_state(state)
-        update_clock_format(time_format_24hr)
-        # Go back to the main menu after setting date/time
+        # Run datetime setting in background to prevent OLED freeze
+        logging.info(f"Applying datetime: {datetime_temp}")
+        def apply_datetime():
+            set_system_datetime(datetime_temp)
+            state = load_state()
+            state["time_format_24hr"] = time_format_24hr
+            save_state(state)
+            update_clock_format(time_format_24hr)
+            # Force timezone reload so display updates immediately
+            if 'TZ' in os.environ:
+                del os.environ['TZ']
+            time.tzset()
+            logging.info("Applied datetime via buttons")
+
+        threading.Thread(target=apply_datetime, daemon=True).start()
+        # Go back to the main menu immediately (don't wait for datetime to apply)
         menu_state = "default"
         menu_selection = 0
         update_oled_display(force=True)
@@ -1071,7 +1100,11 @@ def update_time(increment):
         elif ip_octet == 2:
             new_minute = (datetime_temp.minute + increment) % 60
             datetime_temp = datetime_temp.replace(minute=new_minute)
-        elif ip_octet == 3 and not time_format_24hr:
+        elif ip_octet == 3:
+            # Seconds
+            new_second = (datetime_temp.second + increment) % 60
+            datetime_temp = datetime_temp.replace(second=new_second)
+        elif ip_octet == 4 and not time_format_24hr:
             # Toggle AM/PM
             current_hour = datetime_temp.hour
             if current_hour >= 12:
@@ -1088,6 +1121,9 @@ def set_system_datetime(datetime_temp):
     # Format the full datetime string in a format that 'date' command understands
     # Use 24-hour format for the system command regardless of display preference
     datetime_str = datetime_temp.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Disable NTP first so it doesn't immediately overwrite our manual time
+    execute_command("sudo timedatectl set-ntp false")
 
     # Set the system date and time in one command
     cmd = f"sudo date --set='{datetime_str}'"
@@ -1157,24 +1193,33 @@ def turn_off_oled():
 def update_clock_format(time_format_24hr):
     config_file_path = os.path.expanduser("~/.config/wf-panel-pi.ini")
 
-    # Read the configuration file
-    with open(config_file_path, 'r') as file:
-        lines = file.readlines()
+    try:
+        # Read the configuration file
+        with open(config_file_path, 'r') as file:
+            lines = file.readlines()
 
-    # Modify the clock_format line
-    with open(config_file_path, 'w') as file:
-        for line in lines:
-            if line.startswith('clock_format'):
-                if time_format_24hr:
-                    file.write('clock_format=%H:%M:%S\n')
+        # Modify the clock_format line
+        with open(config_file_path, 'w') as file:
+            for line in lines:
+                if line.startswith('clock_format'):
+                    if time_format_24hr:
+                        file.write('clock_format=%H:%M:%S\n')
+                    else:
+                        file.write('clock_format=%I:%M:%S %p\n')
                 else:
-                    file.write('clock_format=%I:%M:%S %p\n')
-            else:
-                file.write(line)
+                    file.write(line)
 
-    # Restart the panel or system to apply changes
-    subprocess.run(['lxpanelctl', 'restart'], check=True)
-    logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
+        # Restart the panel to apply changes (may fail if no display attached)
+        try:
+            subprocess.run(['lxpanelctl', 'restart'], check=False, capture_output=True)
+        except Exception:
+            pass  # Ignore panel restart errors - service may run without display
+
+        logging.info(f"Clock format set to {'24-hour' if time_format_24hr else '12-hour'} with seconds.")
+    except FileNotFoundError:
+        logging.warning(f"Panel config file not found: {config_file_path}")
+    except Exception as e:
+        logging.error(f"Error updating clock format: {e}")
 
 def download_and_extract_zip_from_github(tag, extract_to):
     """Download the entire OMNICON release ZIP and extract it into extract_to."""
@@ -1406,10 +1451,10 @@ def downgrade_omnicon():
             # Internet is OK but GitHub fetch failed
             logging.error("Connected to internet but cannot fetch updates from GitHub")
             return "UPDATE CHECK\nFAILED"
-    current_version_tuple = tuple(map(int, current_version.strip('V').split('.')))
+    current_version_tuple = tuple(map(int, current_version.lstrip('vV').split('.')))
     older_versions = [
         v for v in available_versions
-        if tuple(map(int, v.strip('V').split('.'))) < current_version_tuple
+        if tuple(map(int, v.lstrip('vV').split('.'))) < current_version_tuple
     ]
     if not older_versions:
         return "NO OLDER VERSIONS"
@@ -1430,18 +1475,33 @@ def perform_downgrade(version):
 
 # Update OLED display in a separate thread
 def update_oled():
-    import math
-    # Start at the next full second boundary
-    next_second = math.floor(time.time()) + 1
+    last_displayed_second = -1
+    last_monotonic = time.monotonic()
+
     while True:
-        # Sleep until the next absolute second boundary
-        now = time.time()
-        sleep_time = next_second - now
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-        update_oled_display()
-        # Always advance by exactly 1 second to prevent drift
-        next_second += 1
+        try:
+            # Use monotonic time for loop timing (not affected by system time changes)
+            current_monotonic = time.monotonic()
+
+            # Check every 0.1 seconds using monotonic clock
+            if current_monotonic - last_monotonic >= 0.1:
+                last_monotonic = current_monotonic
+
+                # Get wall clock time for display
+                now = time.time()
+                current_second = int(now)
+
+                # Only update display when the second changes
+                if current_second != last_displayed_second:
+                    update_oled_display()
+                    last_displayed_second = current_second
+
+            # Short sleep using monotonic-safe sleep
+            time.sleep(0.05)
+        except Exception as e:
+            logging.error(f"Error in update_oled loop: {e}")
+            last_displayed_second = -1  # Reset to force update on next iteration
+            time.sleep(0.5)
 
 
 
@@ -1509,7 +1569,7 @@ def execute_web_commands():
         logging.info(f"Executing web command: {command}")
 
         # Reset interaction time to prevent timeout
-        last_interaction_time = time.time()
+        last_interaction_time = time.monotonic()
 
         # Process different commands
         if command == 'toggle_service':
@@ -1590,7 +1650,23 @@ def execute_web_commands():
                     save_state(state)
                     update_clock_format(time_format_24hr)
 
+                # Force timezone reload so display updates immediately
+                if 'TZ' in os.environ:
+                    del os.environ['TZ']
+                time.tzset()
+                logging.info("Forced timezone reload after datetime change")
+
             threading.Thread(target=set_dt, daemon=True).start()
+
+        elif command == 'reload_timezone':
+            # Force reload of timezone info after timezone change from web
+            def reload_tz():
+                if 'TZ' in os.environ:
+                    del os.environ['TZ']
+                time.tzset()
+                logging.info("Forced timezone reload via web command")
+
+            threading.Thread(target=reload_tz, daemon=True).start()
 
         elif command == 'update_companion_stable':
             # Trigger companion update through OLED menu system
@@ -1685,7 +1761,7 @@ def execute_web_commands():
         logging.info(f"Executing web command: {command}")
 
         # Reset interaction time to prevent timeout
-        last_interaction_time = time.time()
+        last_interaction_time = time.monotonic()
 
         # Process different commands
         if command == 'toggle_service':
@@ -1766,7 +1842,23 @@ def execute_web_commands():
                     save_state(state)
                     update_clock_format(time_format_24hr)
 
+                # Force timezone reload so display updates immediately
+                if 'TZ' in os.environ:
+                    del os.environ['TZ']
+                time.tzset()
+                logging.info("Forced timezone reload after datetime change")
+
             threading.Thread(target=set_dt, daemon=True).start()
+
+        elif command == 'reload_timezone':
+            # Force reload of timezone info after timezone change from web
+            def reload_tz():
+                if 'TZ' in os.environ:
+                    del os.environ['TZ']
+                time.tzset()
+                logging.info("Forced timezone reload via web command")
+
+            threading.Thread(target=reload_tz, daemon=True).start()
 
         elif command == 'update_companion_stable':
             # Trigger companion update through OLED menu system
@@ -1877,7 +1969,7 @@ def process_web_commands():
                         logging.info(f"Simulating {button} press via web")
                         # Reset interaction time to prevent timeout
                         global last_interaction_time
-                        last_interaction_time = time.time()
+                        last_interaction_time = time.monotonic()
 
                         # Simulate button press
                         if button == 'K1':
@@ -2005,7 +2097,7 @@ def process_web_commands():
                         logging.info(f"Simulating {button} press via web")
                         # Reset interaction time to prevent timeout
                         global last_interaction_time
-                        last_interaction_time = time.time()
+                        last_interaction_time = time.monotonic()
 
                         # Simulate button press
                         if button == 'K1':
@@ -2133,7 +2225,7 @@ def process_web_commands():
                         logging.info(f"Simulating {button} press via web")
                         # Reset interaction time to prevent timeout
                         global last_interaction_time
-                        last_interaction_time = time.time()
+                        last_interaction_time = time.monotonic()
 
                         # Simulate button press
                         if button == 'K1':
@@ -2272,7 +2364,8 @@ def fast_adjust_ip(increment):
 def check_timeout():
     global last_interaction_time
     while True:
-        if time.time() - last_interaction_time > 20:  # 20 seconds timeout
+        # Use monotonic time for timeout check (not affected by system time changes)
+        if time.monotonic() - last_interaction_time > 20:  # 20 seconds timeout
             reset_to_main()
         time.sleep(1)
 
