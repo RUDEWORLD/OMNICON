@@ -261,11 +261,12 @@ function showStaticConfig() {
     modal.show();
 }
 
-// Save static configuration
+// Save static configuration and switch to Static mode
 function saveStaticConfig() {
     const ip = $('#staticIp').val();
     const subnet = $('#staticSubnet').val();
     const gateway = $('#staticGateway').val();
+    let dns = $('#staticDns').val().trim();
 
     // Basic validation
     const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
@@ -274,6 +275,15 @@ function saveStaticConfig() {
         return;
     }
 
+    // Validate DNS if provided, otherwise default to gateway
+    if (dns === '') {
+        dns = gateway;
+    } else if (!ipRegex.test(dns)) {
+        showToast('Error', 'Invalid DNS server format', 'error');
+        return;
+    }
+
+    // First save the static IP config
     $.ajax({
         url: '/api/network/static',
         method: 'POST',
@@ -281,12 +291,26 @@ function saveStaticConfig() {
         data: JSON.stringify({
             ip: ip,
             subnet: subnet,
-            gateway: gateway
+            gateway: gateway,
+            dns: dns
         }),
         success: function(data) {
-            showToast('Success', 'Static IP configuration saved', 'success');
-            bootstrap.Modal.getInstance(document.getElementById('staticConfigModal')).hide();
-            setTimeout(loadNetworkSettings, 2000);
+            // Then switch to Static mode
+            $.ajax({
+                url: '/api/network/mode',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({mode: 'STATIC'}),
+                success: function(data) {
+                    showToast('Success', 'Switched to Static IP: ' + ip, 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('staticConfigModal')).hide();
+                    setTimeout(loadNetworkSettings, 2000);
+                },
+                error: function(xhr) {
+                    console.error('Failed to switch to static mode:', xhr);
+                    showToast('Error', 'Failed to switch to Static mode', 'error');
+                }
+            });
         },
         error: function(xhr) {
             console.error('Failed to save static config:', xhr);
@@ -1070,6 +1094,300 @@ function updateSatellite(type) {
             $('#satelliteUpdateProgress').hide();
             const response = xhr.responseJSON;
             showToast('Error', response?.error || 'Failed to start update', 'error');
+        }
+    });
+}
+
+// =============================================
+// WiFi Management Functions
+// =============================================
+
+// Global variable to store selected network
+window.selectedWifiNetwork = null;
+
+// Load WiFi status
+function loadWifiStatus() {
+    $.ajax({
+        url: '/api/wifi/status',
+        method: 'GET',
+        timeout: 5000,
+        success: function(data) {
+            updateWifiStatusDisplay(data);
+        },
+        error: function(xhr) {
+            console.error('Failed to load WiFi status:', xhr);
+            $('#wifiStatusBadge').removeClass().addClass('badge bg-secondary').text('Unknown');
+        }
+    });
+}
+
+// Update WiFi status display
+function updateWifiStatusDisplay(data) {
+    const badge = $('#wifiStatusBadge');
+
+    if (!data.enabled) {
+        badge.removeClass().addClass('badge bg-secondary').text('Disabled');
+        $('#wifiSsidRow').hide();
+        $('#wifiIpRow').hide();
+    } else if (data.connected) {
+        badge.removeClass().addClass('badge bg-success').text('Connected');
+        $('#wifiSsidRow').show();
+        $('#wifiSsid').text(data.ssid || 'Unknown');
+        if (data.signal) {
+            $('#wifiSignal').text('(' + data.signal + '%)');
+        } else {
+            $('#wifiSignal').text('');
+        }
+        if (data.ip) {
+            $('#wifiIpRow').show();
+            $('#wifiIp').text(data.ip);
+        } else {
+            $('#wifiIpRow').hide();
+        }
+    } else {
+        badge.removeClass().addClass('badge bg-warning text-dark').text('Enabled (Not Connected)');
+        $('#wifiSsidRow').hide();
+        $('#wifiIpRow').hide();
+    }
+}
+
+// Show WiFi connect modal
+function showWifiConnect() {
+    // Reset modal state
+    $('#wifiScanStatus').show();
+    $('#wifiNetworkList').hide();
+    $('#wifiPasswordForm').hide();
+    $('#wifiConnectingStatus').hide();
+
+    const modal = new bootstrap.Modal(document.getElementById('wifiConnectModal'));
+    modal.show();
+
+    // Start scanning
+    scanWifi();
+}
+
+// Scan for WiFi networks
+function scanWifi() {
+    $('#wifiScanStatus').show();
+    $('#wifiNetworkList').hide();
+    $('#wifiPasswordForm').hide();
+
+    $.ajax({
+        url: '/api/wifi/scan',
+        method: 'POST',
+        timeout: 30000,
+        success: function(data) {
+            $('#wifiScanStatus').hide();
+            $('#wifiNetworkList').show();
+
+            if (data.networks && data.networks.length > 0) {
+                displayWifiNetworks(data.networks);
+            } else {
+                $('#wifiNetworks').html('<div class="list-group-item text-center text-muted">No networks found</div>');
+            }
+        },
+        error: function(xhr) {
+            $('#wifiScanStatus').hide();
+            $('#wifiNetworkList').show();
+            const response = xhr.responseJSON;
+            $('#wifiNetworks').html('<div class="list-group-item text-center text-danger">Scan failed: ' + (response?.error || 'Unknown error') + '</div>');
+            showToast('Error', 'Failed to scan WiFi networks', 'error');
+        }
+    });
+}
+
+// Display WiFi networks in the list
+function displayWifiNetworks(networks) {
+    let html = '';
+
+    networks.forEach(function(network) {
+        const signalIcon = getSignalIcon(network.signal);
+        const securityBadge = network.security !== 'Open' ?
+            '<span class="badge bg-warning text-dark ms-2"><i class="fas fa-lock"></i></span>' :
+            '<span class="badge bg-secondary ms-2">Open</span>';
+        const connectedBadge = network.connected ?
+            '<span class="badge bg-success ms-2">Connected</span>' : '';
+        const knownBadge = network.known && !network.connected ?
+            '<span class="badge bg-info ms-2">Saved</span>' : '';
+
+        html += `
+            <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center" style="flex: 1; cursor: pointer;" onclick="selectNetwork('${escapeHtml(network.ssid)}', '${escapeHtml(network.security)}', ${network.known})">
+                    <span class="me-3">${signalIcon}</span>
+                    <div>
+                        <strong>${escapeHtml(network.ssid)}</strong>
+                        ${securityBadge}${connectedBadge}${knownBadge}
+                        <br>
+                        <small class="text-muted">Signal: ${network.signal}%</small>
+                    </div>
+                </div>
+                ${network.known ? `
+                    <button class="btn btn-outline-danger btn-sm" onclick="forgetNetwork('${escapeHtml(network.ssid)}'); event.stopPropagation();" title="Forget network">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                ` : ''}
+            </div>
+        `;
+    });
+
+    $('#wifiNetworks').html(html);
+}
+
+// Get signal strength icon
+function getSignalIcon(signal) {
+    if (signal >= 75) {
+        return '<i class="fas fa-wifi text-success" style="font-size: 1.2em;"></i>';
+    } else if (signal >= 50) {
+        return '<i class="fas fa-wifi text-primary" style="font-size: 1.2em;"></i>';
+    } else if (signal >= 25) {
+        return '<i class="fas fa-wifi text-warning" style="font-size: 1.2em;"></i>';
+    } else {
+        return '<i class="fas fa-wifi text-danger" style="font-size: 1.2em;"></i>';
+    }
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Select a network to connect to
+function selectNetwork(ssid, security, isKnown) {
+    window.selectedWifiNetwork = {
+        ssid: ssid,
+        security: security,
+        known: isKnown
+    };
+
+    $('#selectedSsid').text(ssid);
+    $('#selectedSecurity').text(security);
+
+    // Hide password field if it's an open network OR a known/saved network
+    if (security === 'Open' || security === '' || isKnown) {
+        $('#passwordField').hide();
+    } else {
+        $('#passwordField').show();
+    }
+
+    // Clear password field
+    $('#wifiPassword').val('');
+
+    // Show password form
+    $('#wifiNetworkList').hide();
+    $('#wifiPasswordForm').show();
+}
+
+// Show network list (back button)
+function showNetworkList() {
+    $('#wifiPasswordForm').hide();
+    $('#wifiNetworkList').show();
+}
+
+// Toggle password visibility
+function togglePasswordVisibility() {
+    const passwordInput = $('#wifiPassword');
+    const icon = $('#passwordToggleIcon');
+
+    if (passwordInput.attr('type') === 'password') {
+        passwordInput.attr('type', 'text');
+        icon.removeClass('fa-eye').addClass('fa-eye-slash');
+    } else {
+        passwordInput.attr('type', 'password');
+        icon.removeClass('fa-eye-slash').addClass('fa-eye');
+    }
+}
+
+// Connect to WiFi
+function connectToWifi() {
+    if (!window.selectedWifiNetwork) {
+        showToast('Error', 'No network selected', 'error');
+        return;
+    }
+
+    const ssid = window.selectedWifiNetwork.ssid;
+    const password = $('#wifiPassword').val();
+    const security = window.selectedWifiNetwork.security;
+
+    // Check if password is required
+    if (security !== 'Open' && security !== '' && !window.selectedWifiNetwork.known && !password) {
+        showToast('Error', 'Password is required for this network', 'error');
+        return;
+    }
+
+    // Show connecting status
+    $('#wifiPasswordForm').hide();
+    $('#wifiConnectingStatus').show();
+    $('#connectingSsid').text(ssid);
+
+    $.ajax({
+        url: '/api/wifi/connect',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            ssid: ssid,
+            password: password
+        }),
+        timeout: 45000,
+        success: function(data) {
+            showToast('Success', data.message || 'Connected to ' + ssid, 'success');
+            bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
+
+            // Refresh WiFi status
+            setTimeout(loadWifiStatus, 2000);
+        },
+        error: function(xhr) {
+            $('#wifiConnectingStatus').hide();
+            $('#wifiPasswordForm').show();
+
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to connect', 'error');
+        }
+    });
+}
+
+// Disconnect WiFi
+function disconnectWifi() {
+    if (!confirm('Disconnect and disable WiFi?')) {
+        return;
+    }
+
+    $.ajax({
+        url: '/api/wifi/disconnect',
+        method: 'POST',
+        timeout: 15000,
+        success: function(data) {
+            showToast('Success', data.message || 'WiFi disabled', 'success');
+            setTimeout(loadWifiStatus, 1000);
+        },
+        error: function(xhr) {
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to disable WiFi', 'error');
+        }
+    });
+}
+
+// Forget a saved network
+function forgetNetwork(ssid) {
+    if (!confirm('Forget network "' + ssid + '"? You will need to enter the password again to reconnect.')) {
+        return;
+    }
+
+    $.ajax({
+        url: '/api/wifi/forget',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ ssid: ssid }),
+        timeout: 10000,
+        success: function(data) {
+            showToast('Success', data.message || 'Network forgotten', 'success');
+            // Rescan to update the list
+            scanWifi();
+        },
+        error: function(xhr) {
+            const response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to forget network', 'error');
         }
     });
 }

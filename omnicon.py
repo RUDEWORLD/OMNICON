@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.034
-# 11/25/2024
+# V4.2.035
+# 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -467,6 +467,111 @@ def get_current_network_settings():
     dns = dns_servers[0] if dns_servers else "N/A"
     return ip, subnet, gateway, dns
 
+def get_lan_network_info():
+    """Get LAN (eth0) network information for display"""
+    try:
+        # Get network mode (DHCP or STATIC)
+        mode = state.get("network", "DHCP")
+
+        # Get IP address for eth0
+        try:
+            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "eth0"], text=True)
+            ip = "N/A"
+            subnet = "N/A"
+            for line in ip_output.split('\n'):
+                if 'inet ' in line:
+                    parts = line.strip().split()
+                    ip_with_cidr = parts[1]
+                    ip = ip_with_cidr.split('/')[0]
+                    cidr = ip_with_cidr.split('/')[1]
+                    subnet = cidr_to_subnet_mask(cidr)
+                    break
+        except:
+            ip = "N/A"
+            subnet = "N/A"
+
+        # Get gateway
+        try:
+            gw_output = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+            gateway = gw_output.split()[2] if gw_output else "N/A"
+        except:
+            gateway = "N/A"
+
+        return mode, ip, subnet, gateway
+    except Exception as e:
+        logging.error(f"Error getting LAN info: {e}")
+        return "N/A", "N/A", "N/A", "N/A"
+
+def get_wifi_network_info():
+    """Get WiFi (wlan0) network information for display"""
+    try:
+        # Check if WiFi is enabled and connected
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE,STATE", "device"],
+                capture_output=True, text=True, timeout=5
+            )
+            wifi_connected = False
+            wifi_enabled = False
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('wlan0:'):
+                    state_val = line.split(':')[1]
+                    wifi_enabled = state_val not in ['unavailable', 'unmanaged']
+                    wifi_connected = state_val == 'connected'
+                    break
+        except:
+            return None  # WiFi not available
+
+        if not wifi_enabled:
+            return None  # WiFi disabled
+
+        if not wifi_connected:
+            return "DISCONNECTED", None, None, None
+
+        # Get SSID
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID", "device", "wifi", "list", "ifname", "wlan0"],
+                capture_output=True, text=True, timeout=10
+            )
+            ssid = "Unknown"
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[0] == 'yes':
+                    ssid = parts[1]
+                    break
+        except:
+            ssid = "Unknown"
+
+        # Get IP address for wlan0
+        try:
+            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "wlan0"], text=True)
+            ip = "N/A"
+            subnet = "N/A"
+            for line in ip_output.split('\n'):
+                if 'inet ' in line:
+                    parts = line.strip().split()
+                    ip_with_cidr = parts[1]
+                    ip = ip_with_cidr.split('/')[0]
+                    cidr = ip_with_cidr.split('/')[1]
+                    subnet = cidr_to_subnet_mask(cidr)
+                    break
+        except:
+            ip = "N/A"
+            subnet = "N/A"
+
+        # Get gateway (might be different from LAN)
+        try:
+            gw_output = subprocess.check_output(["ip", "route", "show", "default", "dev", "wlan0"], text=True)
+            gateway = gw_output.split()[2] if gw_output else "N/A"
+        except:
+            gateway = "N/A"
+
+        return ssid, ip, subnet, gateway
+    except Exception as e:
+        logging.error(f"Error getting WiFi info: {e}")
+        return None
+
 # FUNCTION TO UPDATE COMMAND WITH PROGRESS
 def execute_command_with_progress(command):
     try:
@@ -678,6 +783,32 @@ def update_oled_display(force=False):
             local_draw.text((12, 16), f"RAM: {memory}", font=font11, fill=255)
             local_draw.text((11, 32), f"V: {voltage}   W: {watt_input:.2f}", font=font11, fill=255)
             local_draw.text((39, 48), f"CPU: {cpu:.2f}%", font=font11, fill=255)
+
+        elif menu_state == "show_lan_stats":
+            mode, ip, subnet, gw = get_lan_network_info()
+            local_draw.text((0, 0), f"LAN: {mode}", font=font11, fill=255)
+            local_draw.text((0, 16), f"IP: {ip}", font=font11, fill=255)
+            local_draw.text((0, 32), f"SUB: {subnet}", font=font11, fill=255)
+            local_draw.text((0, 48), f"GW: {gw}", font=font11, fill=255)
+
+        elif menu_state == "show_wifi_stats":
+            wifi_info = get_wifi_network_info()
+            if wifi_info is None:
+                # WiFi disabled or not available
+                local_draw.text((0, 0), "WIFI", font=font11, fill=255)
+                local_draw.text((0, 24), "DISCONNECTED", font=font14, fill=255)
+            elif wifi_info[0] == "DISCONNECTED":
+                # WiFi enabled but not connected
+                local_draw.text((0, 0), "WIFI", font=font11, fill=255)
+                local_draw.text((0, 24), "DISCONNECTED", font=font14, fill=255)
+            else:
+                ssid, ip, subnet, gw = wifi_info
+                # Truncate SSID if too long
+                display_ssid = ssid[:10] if len(ssid) > 10 else ssid
+                local_draw.text((0, 0), f"WIFI: {display_ssid}", font=font11, fill=255)
+                local_draw.text((0, 16), f"IP: {ip}", font=font11, fill=255)
+                local_draw.text((0, 32), f"SUB: {subnet}", font=font11, fill=255)
+                local_draw.text((0, 48), f"GW: {gw}", font=font11, fill=255)
 
         elif menu_state == "set_date":
             date_display = datetime_temp.strftime("%m/%d/%y")
@@ -901,7 +1032,7 @@ def button_k1_pressed():
     last_interaction_time = time.monotonic()
     timeout_flag = False
 
-    if menu_state in ["show_network_info", "show_pi_health"]:
+    if menu_state in ["show_network_info", "show_pi_health", "show_lan_stats", "show_wifi_stats"]:
         reset_to_main()
     elif menu_state == "default":
         logging.debug("Switching from default to main menu via K1")
@@ -932,7 +1063,7 @@ def button_k2_pressed():
     last_interaction_time = time.monotonic()
     timeout_flag = False
 
-    if menu_state in ["show_network_info", "show_pi_health"]:
+    if menu_state in ["show_network_info", "show_pi_health", "show_lan_stats", "show_wifi_stats"]:
         reset_to_main()
     elif menu_state == "default":
         logging.debug("Switching from default to main menu via K2")
@@ -966,7 +1097,7 @@ def button_k3_pressed():
     last_interaction_time = time.monotonic()
     timeout_flag = False
 
-    if menu_state in ["show_network_info", "show_pi_health"]:
+    if menu_state in ["show_network_info", "show_pi_health", "show_lan_stats", "show_wifi_stats"]:
         reset_to_main()
     elif menu_state == "default":
         menu_state = "show_pi_health"
@@ -1002,6 +1133,17 @@ def button_k4_pressed():
     timeout_flag = False  # Reset timeout flag
 
     if menu_state in ["show_network_info", "show_pi_health"]:
+        reset_to_main()
+    elif menu_state == "default":
+        # Show LAN stats when K4 pressed from default
+        menu_state = "show_lan_stats"
+        logging.debug("Switching to show_lan_stats")
+    elif menu_state == "show_lan_stats":
+        # Show WiFi stats when K4 pressed from LAN stats
+        menu_state = "show_wifi_stats"
+        logging.debug("Switching to show_wifi_stats")
+    elif menu_state == "show_wifi_stats":
+        # Return to default when K4 pressed from WiFi stats
         reset_to_main()
     elif menu_state in ["set_static_ip", "set_static_sm", "set_static_gw", "set_date"]:
         ip_octet = (ip_octet + 1) % 4  # 4 octets for IP/date
@@ -1093,17 +1235,19 @@ def save_static_settings():
     save_state(state)
     logging.info(f"Static settings saved: IP {ip_address}, Subnet {subnet_mask}, Gateway {gateway}")
 
-def apply_static_settings():
+def apply_static_settings(dns_server=None):
     ip_str = '.'.join(map(str, ip_address))
     sm_str = '.'.join(map(str, subnet_mask))
     gw_str = '.'.join(map(str, gateway))
     cidr = subnet_mask_to_cidr(sm_str)
+    # Use provided DNS or default to gateway
+    dns_str = dns_server if dns_server else gw_str
     execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.addresses {ip_str}/{cidr}")
     execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.gateway {gw_str}")
     execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.method manual")
-    execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.dns {gw_str}")
+    execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.dns {dns_str}")
     execute_command(f"sudo nmcli connection up {STATIC_PROFILE}")
-    logging.info("Static IP settings applied to the network profile.")
+    logging.info(f"Static IP settings applied to the network profile. DNS: {dns_str}")
 
 def update_date(increment):
     global datetime_temp
@@ -1649,6 +1793,7 @@ def execute_web_commands():
             ip_str = params.get('ip', '192.168.0.100')
             subnet_str = params.get('subnet', '255.255.255.0')
             gateway_str = params.get('gateway', '192.168.0.1')
+            dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
 
             # Convert to lists
             ip_address = [int(x) for x in ip_str.split('.')]
@@ -1658,8 +1803,8 @@ def execute_web_commands():
             # Run in background to avoid blocking
             def apply_settings():
                 save_static_settings()
-                apply_static_settings()
-                logging.info("Applied static IP settings via web")
+                apply_static_settings(dns_str)
+                logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
             threading.Thread(target=apply_settings, daemon=True).start()
 
@@ -1841,6 +1986,7 @@ def execute_web_commands():
             ip_str = params.get('ip', '192.168.0.100')
             subnet_str = params.get('subnet', '255.255.255.0')
             gateway_str = params.get('gateway', '192.168.0.1')
+            dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
 
             # Convert to lists
             ip_address = [int(x) for x in ip_str.split('.')]
@@ -1850,8 +1996,8 @@ def execute_web_commands():
             # Run in background to avoid blocking
             def apply_settings():
                 save_static_settings()
-                apply_static_settings()
-                logging.info("Applied static IP settings via web")
+                apply_static_settings(dns_str)
+                logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
             threading.Thread(target=apply_settings, daemon=True).start()
 
@@ -2417,10 +2563,16 @@ def fast_adjust_ip(increment):
     time.sleep(.6)  # Reduce sleep time to make the changes more responsive
 
 def check_timeout():
-    global last_interaction_time
+    global last_interaction_time, menu_state
     while True:
         # Use monotonic time for timeout check (not affected by system time changes)
-        if time.monotonic() - last_interaction_time > 20:  # 20 seconds timeout
+        elapsed = time.monotonic() - last_interaction_time
+        # Use 30 second timeout for network stats screens, 20 seconds for other menus
+        if menu_state in ["show_lan_stats", "show_wifi_stats"]:
+            timeout_seconds = 30
+        else:
+            timeout_seconds = 20
+        if elapsed > timeout_seconds:
             reset_to_main()
         time.sleep(1)
 

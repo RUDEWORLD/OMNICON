@@ -392,11 +392,17 @@ def api_set_static():
     try:
         data = request.get_json()
 
+        # Get DNS, default to gateway if not provided
+        dns = data.get('dns', '').strip()
+        if not dns:
+            dns = data.get('gateway')
+
         # Send command to omnicon.py
         success = send_command_to_omnicon('set_static_ip', {
             'ip': data.get('ip'),
             'subnet': data.get('subnet'),
-            'gateway': data.get('gateway')
+            'gateway': data.get('gateway'),
+            'dns': dns
         })
 
         if success:
@@ -1226,6 +1232,316 @@ def api_update_satellite():
 
     except Exception as e:
         logging.error(f"Error updating satellite: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# WiFi Management API routes
+@app.route('/api/wifi/status')
+@login_required
+def api_wifi_status():
+    """Get current WiFi status"""
+    try:
+        # Check if WiFi is enabled
+        wifi_enabled = False
+        wifi_connected = False
+        wifi_ssid = None
+        wifi_ip = None
+        wifi_signal = None
+
+        # Check if wlan0 exists and is up
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE,STATE", "device"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('wlan0:'):
+                    state = line.split(':')[1]
+                    wifi_enabled = state not in ['unavailable', 'unmanaged']
+                    wifi_connected = state == 'connected'
+                    break
+        except Exception as e:
+            logging.error(f"Error checking WiFi device state: {e}")
+
+        # Get connected SSID and signal strength
+        if wifi_connected:
+            try:
+                result = subprocess.run(
+                    ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "device", "wifi", "list", "ifname", "wlan0"],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.strip().split('\n'):
+                    parts = line.split(':')
+                    if len(parts) >= 3 and parts[0] == 'yes':
+                        wifi_ssid = parts[1]
+                        wifi_signal = parts[2]
+                        break
+            except Exception as e:
+                logging.error(f"Error getting connected SSID: {e}")
+
+        # Get WiFi IP address
+        if wifi_connected:
+            try:
+                result = subprocess.run(
+                    ["ip", "-4", "addr", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.split('\n'):
+                    if 'inet ' in line:
+                        wifi_ip = line.strip().split()[1].split('/')[0]
+                        break
+            except Exception as e:
+                logging.error(f"Error getting WiFi IP: {e}")
+
+        return jsonify({
+            "enabled": wifi_enabled,
+            "connected": wifi_connected,
+            "ssid": wifi_ssid,
+            "ip": wifi_ip,
+            "signal": wifi_signal
+        })
+
+    except Exception as e:
+        logging.error(f"Error getting WiFi status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/wifi/scan', methods=['POST'])
+@login_required
+def api_wifi_scan():
+    """Scan for available WiFi networks"""
+    try:
+        # First ensure WiFi is enabled
+        subprocess.run(
+            ["sudo", "nmcli", "radio", "wifi", "on"],
+            capture_output=True, text=True, timeout=5
+        )
+
+        # Wait a moment for WiFi to come up
+        import time
+        time.sleep(1)
+
+        # Trigger a rescan
+        subprocess.run(
+            ["sudo", "nmcli", "device", "wifi", "rescan", "ifname", "wlan0"],
+            capture_output=True, text=True, timeout=10
+        )
+
+        # Wait for scan to complete
+        time.sleep(2)
+
+        # Get list of available networks
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "device", "wifi", "list", "ifname", "wlan0"],
+            capture_output=True, text=True, timeout=15
+        )
+
+        networks = []
+        seen_ssids = set()
+
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split(':')
+            if len(parts) >= 4:
+                ssid = parts[0]
+                if ssid and ssid not in seen_ssids:  # Skip duplicates and empty SSIDs
+                    seen_ssids.add(ssid)
+                    networks.append({
+                        "ssid": ssid,
+                        "signal": int(parts[1]) if parts[1].isdigit() else 0,
+                        "security": parts[2] if parts[2] else "Open",
+                        "connected": parts[3] == '*'
+                    })
+
+        # Sort by signal strength (strongest first)
+        networks.sort(key=lambda x: x['signal'], reverse=True)
+
+        # Get list of known/saved networks
+        known_networks = []
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[1] == '802-11-wireless':
+                    known_networks.append(parts[0])
+        except:
+            pass
+
+        # Mark known networks
+        for network in networks:
+            network['known'] = network['ssid'] in known_networks
+
+        return jsonify({
+            "success": True,
+            "networks": networks,
+            "known_networks": known_networks
+        })
+
+    except Exception as e:
+        logging.error(f"Error scanning WiFi: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/wifi/connect', methods=['POST'])
+@login_required
+def api_wifi_connect():
+    """Connect to a WiFi network"""
+    try:
+        data = request.get_json()
+        ssid = data.get('ssid')
+        password = data.get('password', '')
+
+        if not ssid:
+            return jsonify({"success": False, "error": "No SSID specified"}), 400
+
+        # Check if this is a known network
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+            capture_output=True, text=True, timeout=5
+        )
+        known_connection = None
+        for line in result.stdout.strip().split('\n'):
+            parts = line.split(':')
+            if len(parts) >= 2 and parts[1] == '802-11-wireless' and parts[0] == ssid:
+                known_connection = ssid
+                break
+
+        if known_connection:
+            # Connect using existing profile
+            result = subprocess.run(
+                ["sudo", "nmcli", "connection", "up", known_connection],
+                capture_output=True, text=True, timeout=30
+            )
+        else:
+            # Create new connection
+            if password:
+                result = subprocess.run(
+                    ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", password, "ifname", "wlan0"],
+                    capture_output=True, text=True, timeout=30
+                )
+            else:
+                result = subprocess.run(
+                    ["sudo", "nmcli", "device", "wifi", "connect", ssid, "ifname", "wlan0"],
+                    capture_output=True, text=True, timeout=30
+                )
+
+        if result.returncode == 0:
+            # Set WiFi as higher priority for internet routing
+            # Lower metric = higher priority
+            try:
+                # Get the connection name (might be auto-generated)
+                conn_result = subprocess.run(
+                    ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+                    capture_output=True, text=True, timeout=5
+                )
+                wifi_conn_name = None
+                for line in conn_result.stdout.strip().split('\n'):
+                    parts = line.split(':')
+                    if len(parts) >= 2 and parts[1] == 'wlan0':
+                        wifi_conn_name = parts[0]
+                        break
+
+                if wifi_conn_name:
+                    # Set lower metric (higher priority) for WiFi
+                    subprocess.run(
+                        ["sudo", "nmcli", "connection", "modify", wifi_conn_name, "ipv4.route-metric", "50"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    # Reapply to take effect
+                    subprocess.run(
+                        ["sudo", "nmcli", "connection", "up", wifi_conn_name],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    logging.info(f"Set WiFi connection '{wifi_conn_name}' to higher priority (metric 50)")
+            except Exception as e:
+                logging.warning(f"Could not set WiFi priority: {e}")
+
+            return jsonify({"success": True, "message": f"Connected to {ssid}"})
+        else:
+            error_msg = result.stderr or result.stdout or "Connection failed"
+            logging.error(f"WiFi connection failed: {error_msg}")
+            return jsonify({"success": False, "error": error_msg}), 500
+
+    except Exception as e:
+        logging.error(f"Error connecting to WiFi: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/wifi/disconnect', methods=['POST'])
+@login_required
+def api_wifi_disconnect():
+    """Disconnect and disable WiFi"""
+    try:
+        # Disconnect any active WiFi connection
+        subprocess.run(
+            ["sudo", "nmcli", "device", "disconnect", "wlan0"],
+            capture_output=True, text=True, timeout=10
+        )
+
+        # Disable WiFi radio
+        result = subprocess.run(
+            ["sudo", "nmcli", "radio", "wifi", "off"],
+            capture_output=True, text=True, timeout=5
+        )
+
+        if result.returncode == 0:
+            logging.info("WiFi disabled successfully")
+            return jsonify({"success": True, "message": "WiFi disabled"})
+        else:
+            error_msg = result.stderr or "Failed to disable WiFi"
+            return jsonify({"success": False, "error": error_msg}), 500
+
+    except Exception as e:
+        logging.error(f"Error disabling WiFi: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/wifi/forget', methods=['POST'])
+@login_required
+def api_wifi_forget():
+    """Forget a saved WiFi network"""
+    try:
+        data = request.get_json()
+        ssid = data.get('ssid')
+
+        if not ssid:
+            return jsonify({"success": False, "error": "No SSID specified"}), 400
+
+        # Find and delete the connection
+        result = subprocess.run(
+            ["sudo", "nmcli", "connection", "delete", ssid],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            logging.info(f"Forgot WiFi network: {ssid}")
+            return jsonify({"success": True, "message": f"Forgot network {ssid}"})
+        else:
+            error_msg = result.stderr or f"Failed to forget {ssid}"
+            return jsonify({"success": False, "error": error_msg}), 500
+
+    except Exception as e:
+        logging.error(f"Error forgetting WiFi network: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/wifi/enable', methods=['POST'])
+@login_required
+def api_wifi_enable():
+    """Enable WiFi radio"""
+    try:
+        result = subprocess.run(
+            ["sudo", "nmcli", "radio", "wifi", "on"],
+            capture_output=True, text=True, timeout=5
+        )
+
+        if result.returncode == 0:
+            logging.info("WiFi enabled successfully")
+            return jsonify({"success": True, "message": "WiFi enabled"})
+        else:
+            error_msg = result.stderr or "Failed to enable WiFi"
+            return jsonify({"success": False, "error": error_msg}), 500
+
+    except Exception as e:
+        logging.error(f"Error enabling WiFi: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 # Terminal API routes
