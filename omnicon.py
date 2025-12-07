@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.035
+# V4.2.037
 # 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1804,6 +1804,10 @@ def execute_web_commands():
             def apply_settings():
                 save_static_settings()
                 apply_static_settings(dns_str)
+                # Also update network mode to STATIC in state
+                state = load_state()
+                state["network"] = "STATIC"
+                save_state(state)
                 logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
             threading.Thread(target=apply_settings, daemon=True).start()
@@ -1997,6 +2001,10 @@ def execute_web_commands():
             def apply_settings():
                 save_static_settings()
                 apply_static_settings(dns_str)
+                # Also update network mode to STATIC in state
+                state = load_state()
+                state["network"] = "STATIC"
+                save_state(state)
                 logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
             threading.Thread(target=apply_settings, daemon=True).start()
@@ -2134,6 +2142,7 @@ def process_web_commands():
                         ip_str = params.get('ip', '192.168.0.100')
                         subnet_str = params.get('subnet', '255.255.255.0')
                         gateway_str = params.get('gateway', '192.168.0.1')
+                        dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
 
                         # Convert to lists
                         ip_address = [int(x) for x in ip_str.split('.')]
@@ -2141,8 +2150,12 @@ def process_web_commands():
                         gateway = [int(x) for x in gateway_str.split('.')]
 
                         save_static_settings()
-                        apply_static_settings()
-                        logging.info("Applied static IP settings via web")
+                        apply_static_settings(dns_str)
+                        # Also update network mode to STATIC in state
+                        state = load_state()
+                        state["network"] = "STATIC"
+                        save_state(state)
+                        logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
                     elif command == 'power':
                         action = params.get('action')
@@ -2262,6 +2275,7 @@ def process_web_commands():
                         ip_str = params.get('ip', '192.168.0.100')
                         subnet_str = params.get('subnet', '255.255.255.0')
                         gateway_str = params.get('gateway', '192.168.0.1')
+                        dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
 
                         # Convert to lists
                         ip_address = [int(x) for x in ip_str.split('.')]
@@ -2269,8 +2283,12 @@ def process_web_commands():
                         gateway = [int(x) for x in gateway_str.split('.')]
 
                         save_static_settings()
-                        apply_static_settings()
-                        logging.info("Applied static IP settings via web")
+                        apply_static_settings(dns_str)
+                        # Also update network mode to STATIC in state
+                        state = load_state()
+                        state["network"] = "STATIC"
+                        save_state(state)
+                        logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
                     elif command == 'power':
                         action = params.get('action')
@@ -2390,6 +2408,7 @@ def process_web_commands():
                         ip_str = params.get('ip', '192.168.0.100')
                         subnet_str = params.get('subnet', '255.255.255.0')
                         gateway_str = params.get('gateway', '192.168.0.1')
+                        dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
 
                         # Convert to lists
                         ip_address = [int(x) for x in ip_str.split('.')]
@@ -2397,8 +2416,12 @@ def process_web_commands():
                         gateway = [int(x) for x in gateway_str.split('.')]
 
                         save_static_settings()
-                        apply_static_settings()
-                        logging.info("Applied static IP settings via web")
+                        apply_static_settings(dns_str)
+                        # Also update network mode to STATIC in state
+                        state = load_state()
+                        state["network"] = "STATIC"
+                        save_state(state)
+                        logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
                     elif command == 'power':
                         action = params.get('action')

@@ -197,10 +197,15 @@ function updateNetworkDisplay(data) {
         $('#dhcpMode').prop('checked', false);
     }
 
-    // Update static config fields
-    $('#staticIp').val(data.static_ip || '');
-    $('#staticSubnet').val(data.static_subnet || '');
-    $('#staticGateway').val(data.static_gateway || '');
+    // Update static config fields only if the modal is not currently open
+    // This prevents overwriting user input while they're editing
+    const staticModal = document.getElementById('staticConfigModal');
+    const isModalOpen = staticModal && staticModal.classList.contains('show');
+    if (!isModalOpen) {
+        $('#staticIp').val(data.static_ip || '');
+        $('#staticSubnet').val(data.static_subnet || '');
+        $('#staticGateway').val(data.static_gateway || '');
+    }
 }
 
 // Toggle service
@@ -245,14 +250,54 @@ function setNetworkMode(mode) {
         contentType: 'application/json',
         data: JSON.stringify({mode: mode}),
         success: function(data) {
-            showToast('Success', `Switched to ${mode} mode`, 'success');
-            setTimeout(loadNetworkSettings, 2000);
+            showToast('Success', `Switching to ${mode} mode. Redirecting...`, 'success');
+            // Poll for the new IP and redirect
+            setTimeout(function() {
+                pollForNewIP(mode);
+            }, 2000);
         },
         error: function(xhr) {
             console.error('Failed to set network mode:', xhr);
             showToast('Error', 'Failed to set network mode', 'error');
         }
     });
+}
+
+// Poll for new IP after network mode change and redirect
+function pollForNewIP(mode) {
+    var attempts = 0;
+    var maxAttempts = 10;
+
+    function checkIP() {
+        $.ajax({
+            url: '/api/network/settings',
+            method: 'GET',
+            timeout: 2000,
+            success: function(data) {
+                var newIP = data.current_ip;
+                if (newIP && newIP !== 'N/A') {
+                    // Redirect to new IP
+                    var port = window.location.port ? ':' + window.location.port : '';
+                    window.location.href = 'http://' + newIP + port + window.location.pathname;
+                } else if (attempts < maxAttempts) {
+                    attempts++;
+                    setTimeout(checkIP, 1000);
+                }
+            },
+            error: function() {
+                // Connection lost, try to find new IP via static settings if switching to static
+                if (mode === 'STATIC' && currentNetworkSettings && currentNetworkSettings.static_ip) {
+                    var port = window.location.port ? ':' + window.location.port : '';
+                    window.location.href = 'http://' + currentNetworkSettings.static_ip + port + window.location.pathname;
+                } else if (attempts < maxAttempts) {
+                    attempts++;
+                    setTimeout(checkIP, 1000);
+                }
+            }
+        });
+    }
+
+    checkIP();
 }
 
 // Show static configuration modal
@@ -283,7 +328,7 @@ function saveStaticConfig() {
         return;
     }
 
-    // First save the static IP config
+    // Save the static IP config and switch to Static mode (handled by backend)
     $.ajax({
         url: '/api/network/static',
         method: 'POST',
@@ -295,22 +340,12 @@ function saveStaticConfig() {
             dns: dns
         }),
         success: function(data) {
-            // Then switch to Static mode
-            $.ajax({
-                url: '/api/network/mode',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({mode: 'STATIC'}),
-                success: function(data) {
-                    showToast('Success', 'Switched to Static IP: ' + ip, 'success');
-                    bootstrap.Modal.getInstance(document.getElementById('staticConfigModal')).hide();
-                    setTimeout(loadNetworkSettings, 2000);
-                },
-                error: function(xhr) {
-                    console.error('Failed to switch to static mode:', xhr);
-                    showToast('Error', 'Failed to switch to Static mode', 'error');
-                }
-            });
+            showToast('Success', 'Switching to Static IP: ' + ip + '. Redirecting...', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('staticConfigModal')).hide();
+            // Redirect to the new IP after a delay to allow network change to complete
+            setTimeout(function() {
+                window.location.href = 'http://' + ip + ':' + window.location.port + window.location.pathname;
+            }, 3000);
         },
         error: function(xhr) {
             console.error('Failed to save static config:', xhr);
