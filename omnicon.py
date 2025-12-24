@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.053
+# V4.2.054
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -198,10 +198,26 @@ def restore_keybindings():
     except Exception as e:
         logging.error(f"Failed to restore keybindings: {e}")
 
+def ensure_autologin():
+    """Ensure desktop autologin is enabled for kiosk mode."""
+    try:
+        result = subprocess.run(['raspi-config', 'nonint', 'get_autologin'],
+                                capture_output=True, text=True)
+        if result.stdout.strip() != '0':
+            # Autologin not enabled, enable it (B4 = desktop autologin)
+            subprocess.run(['sudo', 'raspi-config', 'nonint', 'do_boot_behaviour', 'B4'],
+                          capture_output=True)
+            logging.info("Enabled desktop autologin for kiosk mode")
+    except Exception as e:
+        logging.error(f"Failed to check/set autologin: {e}")
+
 def start_kiosk():
     """Start kiosk if display available."""
     if not KIOSK_ENABLED:
         return None
+
+    # Ensure autologin is enabled
+    ensure_autologin()
 
     # Find display
     if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
