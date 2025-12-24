@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.049
+# V4.2.050
 # 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -91,6 +91,44 @@ X-GNOME-Autostart-enabled=true
                 logging.info("Auto-login enabled successfully")
             except subprocess.CalledProcessError as e:
                 logging.warning(f"Failed to enable auto-login: {e}")
+
+        # Create/update wayfire.ini with kiosk window rules
+        wayfire_config = os.path.join(home_dir, ".config", "wayfire.ini")
+        wayfire_content = """[output:NOOP-1]
+mode = 2048x1080
+position = 0,0
+transform = normal
+
+[workarounds]
+all_workspaces_sticky = true
+
+[window-rules]
+rule_1 = on created if app_id is "chromium-browser" then set fullscreen
+"""
+        # Check if wayfire.ini needs kiosk rules
+        needs_update = True
+        if os.path.exists(wayfire_config):
+            with open(wayfire_config, 'r') as f:
+                existing = f.read()
+                if 'window-rules' in existing and 'chromium-browser' in existing:
+                    needs_update = False
+
+        if needs_update:
+            logging.info("Setting up Wayfire kiosk window rules...")
+            # If file exists, append rules; otherwise create new
+            if os.path.exists(wayfire_config):
+                with open(wayfire_config, 'r') as f:
+                    existing = f.read()
+                if '[window-rules]' not in existing:
+                    with open(wayfire_config, 'a') as f:
+                        f.write("""
+[window-rules]
+rule_1 = on created if app_id is "chromium-browser" then set fullscreen
+""")
+            else:
+                with open(wayfire_config, 'w') as f:
+                    f.write(wayfire_content)
+            logging.info("Wayfire config updated for kiosk mode")
 
     except Exception as e:
         logging.warning(f"Kiosk setup warning (non-fatal): {e}")
