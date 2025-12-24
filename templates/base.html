@@ -25,6 +25,11 @@
                             <i class="fas fa-tachometer-alt"></i> Dashboard
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-danger" href="#" onclick="showKioskCloseModal(); return false;" title="Close Kiosk">
+                            <i class="fas fa-times-circle"></i>
+                        </a>
+                    </li>
                 </ul>
             </div>
         </div>
@@ -34,9 +39,81 @@
         {% block content %}{% endblock %}
     </div>
 
+    <!-- Kiosk Close Modal -->
+    <div class="modal fade" id="kioskCloseModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="fas fa-lock"></i> Exit Kiosk</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="kioskPassword" class="form-label">Enter Password</label>
+                        <input type="password" class="form-control" id="kioskPassword" placeholder="Password" autocomplete="off">
+                        <div id="kioskPasswordError" class="text-danger mt-2" style="display: none;">
+                            Incorrect password
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" onclick="closeKiosk()">
+                        <i class="fas fa-sign-out-alt"></i> Exit
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+    <script>
+    function showKioskCloseModal() {
+        document.getElementById('kioskPassword').value = '';
+        document.getElementById('kioskPasswordError').style.display = 'none';
+        var modal = new bootstrap.Modal(document.getElementById('kioskCloseModal'));
+        modal.show();
+        setTimeout(function() {
+            document.getElementById('kioskPassword').focus();
+        }, 500);
+    }
+
+    function closeKiosk() {
+        var password = document.getElementById('kioskPassword').value;
+        fetch('/api/kiosk/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: password})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                bootstrap.Modal.getInstance(document.getElementById('kioskCloseModal')).hide();
+            } else {
+                document.getElementById('kioskPasswordError').style.display = 'block';
+                document.getElementById('kioskPassword').value = '';
+                document.getElementById('kioskPassword').focus();
+            }
+        })
+        .catch(err => {
+            console.error('Error:', err);
+            document.getElementById('kioskPasswordError').textContent = 'Connection error';
+            document.getElementById('kioskPasswordError').style.display = 'block';
+        });
+    }
+
+    // Allow Enter key to submit
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('kioskPassword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                closeKiosk();
+            }
+        });
+    });
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

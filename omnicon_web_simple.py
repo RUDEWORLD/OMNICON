@@ -822,6 +822,34 @@ def api_button_press():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+# Kiosk mode control
+@app.route('/api/kiosk/close', methods=['POST'])
+def api_kiosk_close():
+    """Close/minimize kiosk mode with password protection"""
+    try:
+        data = request.get_json()
+        password = data.get('password', '')
+
+        # Load config to get kiosk password
+        config = load_config()
+        kiosk_password = config.get('kiosk_password', 'omnicon')  # Default password
+
+        # Check password
+        if password != kiosk_password:
+            return jsonify({"success": False, "error": "Incorrect password"})
+
+        # Kill the kiosk chromium process
+        try:
+            subprocess.run(['pkill', '-f', 'chromium.*kiosk'], check=False)
+            logging.info("Kiosk mode closed via web interface")
+            return jsonify({"success": True})
+        except Exception as e:
+            logging.error(f"Failed to close kiosk: {e}")
+            return jsonify({"success": False, "error": str(e)})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # Simple Terminal handling (no WebSocket required)
 terminal_sessions = {}
 
