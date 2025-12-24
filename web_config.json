@@ -1,6 +1,5 @@
 {
   "username": "admin",
   "password": "a23d1d9f270a080cad40995adcc20ac94e45cd8532985122e084aad862855e4f",
-  "port": 8080,
-  "kiosk_password": "3113"
+  "port": 8080
 }

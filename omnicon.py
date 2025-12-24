@@ -1,7 +1,7 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.052
-# 12/07/2024
+# V4.2.053
+# 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
 
@@ -31,110 +31,215 @@ import shutil
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
 
-# ============================================
-# KIOSK MODE AUTO-CONFIGURATION
-# ============================================
-def setup_kiosk_mode():
-    """Configure kiosk mode and auto-login if not already set"""
+# ============================================================================
+# FULLSCREEN KIOSK GUI
+# ============================================================================
+KIOSK_PASSWORD = "3113"
+KIOSK_ENABLED = True
+
+def run_kiosk_gui():
+    """Simple fullscreen GTK window with WebView inside."""
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('WebKit2', '4.1')
+    from gi.repository import Gtk, WebKit2
+
+    # Get port from config
+    port = 8080
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        home_dir = os.path.expanduser("~")
-        autostart_dir = os.path.join(home_dir, ".config", "autostart")
-        autostart_file = os.path.join(autostart_dir, "omnicon-kiosk.desktop")
-        kiosk_script = os.path.join(script_dir, "start-kiosk.sh")
+        with open('/home/omnicon/OLED_Stats/web_config.json', 'r') as f:
+            port = json.load(f).get('port', 8080)
+    except:
+        pass
 
-        # Ensure start-kiosk.sh is executable
-        if os.path.exists(kiosk_script):
-            os.chmod(kiosk_script, 0o755)
+    # Create window
+    window = Gtk.Window(title="Omnicon")
+    window.set_decorated(False)
+    window.fullscreen()
+    window.connect('delete-event', lambda w, e: True)  # Block close
 
-        # Check if autostart file exists
-        if not os.path.exists(autostart_file):
-            logging.info("Setting up kiosk mode autostart...")
+    # Overlay for webview + close button
+    overlay = Gtk.Overlay()
+    window.add(overlay)
 
-            # Create autostart directory if needed
-            os.makedirs(autostart_dir, exist_ok=True)
+    # WebView with hardware acceleration disabled
+    webview = WebKit2.WebView()
+    settings = webview.get_settings()
+    settings.set_property('hardware-acceleration-policy', WebKit2.HardwareAccelerationPolicy.NEVER)
+    webview.load_uri(f'http://127.0.0.1:{port}')
+    overlay.add(webview)
 
-            # Create the autostart desktop entry
-            desktop_entry = """[Desktop Entry]
-Type=Application
-Name=Omnicon Kiosk
-Comment=Launch Omnicon Web GUI in kiosk mode
-Exec={}/start-kiosk.sh
-Terminal=false
-Hidden=false
-X-GNOME-Autostart-enabled=true
-""".format(script_dir)
+    # Close button - small red circle
+    btn = Gtk.Button(label="✕")
+    btn.set_size_request(24, 24)
+    btn.set_halign(Gtk.Align.END)
+    btn.set_valign(Gtk.Align.START)
+    btn.set_margin_top(8)
+    btn.set_margin_end(8)
 
-            with open(autostart_file, 'w') as f:
-                f.write(desktop_entry)
+    # Style it red and round
+    css = Gtk.CssProvider()
+    css.load_from_data(b'''
+        button {
+            background: #cc0000;
+            border-radius: 12px;
+            border: none;
+            color: white;
+            font-size: 12px;
+            padding: 0;
+            min-width: 24px;
+            min-height: 24px;
+        }
+        button:hover {
+            background: #ff0000;
+        }
+    ''')
+    btn.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    overlay.add_overlay(btn)
 
-            logging.info("Kiosk autostart file created")
+    def on_close_clicked(button):
+        dialog = Gtk.MessageDialog(
+            parent=window,
+            flags=Gtk.DialogFlags.MODAL,
+            type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            message_format="Enter password to minimize:"
+        )
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        dialog.get_content_area().pack_end(entry, False, False, 0)
+        dialog.show_all()
 
-        # Check if auto-login is enabled (check lightdm config)
-        lightdm_conf = "/etc/lightdm/lightdm.conf"
-        autologin_enabled = False
+        if dialog.run() == Gtk.ResponseType.OK and entry.get_text() == KIOSK_PASSWORD:
+            dialog.destroy()
+            restore_keybindings()  # Restore shortcuts
+            Gtk.main_quit()  # Exit the GTK loop and close kiosk
+            return
+        dialog.destroy()
 
-        if os.path.exists(lightdm_conf):
-            with open(lightdm_conf, 'r') as f:
+    btn.connect('clicked', on_close_clicked)
+
+    window.show_all()
+    Gtk.main()
+
+def setup_kiosk_keybindings():
+    """Disable wayfire keyboard shortcuts for kiosk mode."""
+    config_file = '/home/omnicon/.config/wayfire.ini'
+    backup_file = '/home/omnicon/.config/wayfire.ini.backup'
+
+    try:
+        # Backup original config if not already backed up
+        if os.path.exists(config_file) and not os.path.exists(backup_file):
+            shutil.copy(config_file, backup_file)
+            logging.info("Backed up original wayfire config")
+
+        # Read current config and comment out dangerous keybindings
+        if os.path.exists(backup_file):
+            with open(backup_file, 'r') as f:
                 content = f.read()
-                if 'autologin-user=' in content and '#autologin-user' not in content:
-                    autologin_enabled = True
+        else:
+            with open(config_file, 'r') as f:
+                content = f.read()
 
-        if not autologin_enabled:
-            logging.info("Enabling auto-login for kiosk mode...")
-            try:
-                subprocess.run(
-                    ['sudo', 'raspi-config', 'nonint', 'do_boot_behaviour', 'B4'],
-                    check=True,
-                    capture_output=True
-                )
-                logging.info("Auto-login enabled successfully")
-            except subprocess.CalledProcessError as e:
-                logging.warning(f"Failed to enable auto-login: {e}")
-
-        # Create/update wayfire.ini with kiosk window rules
-        wayfire_config = os.path.join(home_dir, ".config", "wayfire.ini")
-        wayfire_content = """[output:NOOP-1]
-mode = 1920x1080
-position = 0,0
-transform = normal
-
-[workarounds]
-all_workspaces_sticky = true
-
-[window-rules]
-rule_1 = on created if app_id is "chromium-browser" then set fullscreen
-"""
-        # Check if wayfire.ini needs kiosk rules
-        needs_update = True
-        if os.path.exists(wayfire_config):
-            with open(wayfire_config, 'r') as f:
-                existing = f.read()
-                if 'window-rules' in existing and 'chromium-browser' in existing:
-                    needs_update = False
-
-        if needs_update:
-            logging.info("Setting up Wayfire kiosk window rules...")
-            # If file exists, append rules; otherwise create new
-            if os.path.exists(wayfire_config):
-                with open(wayfire_config, 'r') as f:
-                    existing = f.read()
-                if '[window-rules]' not in existing:
-                    with open(wayfire_config, 'a') as f:
-                        f.write("""
-[window-rules]
-rule_1 = on created if app_id is "chromium-browser" then set fullscreen
-""")
+        # Comment out terminal, menu, and other shortcuts
+        lines = content.split('\n')
+        new_lines = []
+        for line in lines:
+            # Disable these bindings by commenting them out
+            if any(x in line for x in ['binding_terminal', 'command_terminal',
+                                        'binding_menu', 'command_menu',
+                                        'binding_quit', 'command_quit',
+                                        'binding_netman', 'command_netman',
+                                        'binding_bluetooth', 'command_bluetooth']):
+                if not line.strip().startswith('#'):
+                    new_lines.append('# KIOSK_DISABLED: ' + line)
+                else:
+                    new_lines.append(line)
             else:
-                with open(wayfire_config, 'w') as f:
-                    f.write(wayfire_content)
-            logging.info("Wayfire config updated for kiosk mode")
+                new_lines.append(line)
 
+        # Add section to disable switcher (Alt+Tab) and other escapes
+        new_lines.append('')
+        new_lines.append('# KIOSK MODE - disable window switching and escapes')
+        new_lines.append('[switcher]')
+        new_lines.append('next_view = none')
+        new_lines.append('prev_view = none')
+        new_lines.append('[fast-switcher]')
+        new_lines.append('activate = none')
+        new_lines.append('activate_backward = none')
+        new_lines.append('[expo]')
+        new_lines.append('toggle = none')
+        new_lines.append('[vswitch]')
+        new_lines.append('binding_left = none')
+        new_lines.append('binding_right = none')
+        new_lines.append('binding_up = none')
+        new_lines.append('binding_down = none')
+
+        with open(config_file, 'w') as f:
+            f.write('\n'.join(new_lines))
+
+        # Wayfire needs IPC to reload - try dbus or write to socket
+        subprocess.run(['pkill', '-HUP', 'wayfire'], capture_output=True)
+        # Also try wf-msg if available
+        subprocess.run(['wf-msg', 'reload'], capture_output=True)
+        logging.info("Kiosk keybindings applied (wayfire)")
     except Exception as e:
-        logging.warning(f"Kiosk setup warning (non-fatal): {e}")
+        logging.error(f"Failed to setup kiosk keybindings: {e}")
 
-# Run kiosk setup on startup
-setup_kiosk_mode()
+def restore_keybindings():
+    """Restore original wayfire config when kiosk is minimized."""
+    config_file = '/home/omnicon/.config/wayfire.ini'
+    backup_file = '/home/omnicon/.config/wayfire.ini.backup'
+    try:
+        if os.path.exists(backup_file):
+            shutil.copy(backup_file, config_file)
+            subprocess.run(['pkill', '-HUP', 'wayfire'], capture_output=True)
+            logging.info("Restored original wayfire keybindings")
+    except Exception as e:
+        logging.error(f"Failed to restore keybindings: {e}")
+
+def start_kiosk():
+    """Start kiosk if display available."""
+    if not KIOSK_ENABLED:
+        return None
+
+    # Find display
+    if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
+        try:
+            import pwd
+            uid = pwd.getpwnam('omnicon').pw_uid
+            runtime_dir = f"/run/user/{uid}"
+            for item in os.listdir(runtime_dir):
+                if item.startswith('wayland-') and not item.endswith('.lock'):
+                    os.environ['WAYLAND_DISPLAY'] = item
+                    os.environ['XDG_RUNTIME_DIR'] = runtime_dir
+                    break
+        except:
+            pass
+
+    if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
+        logging.info("No display available - skipping kiosk")
+        return None
+
+    # Disable compositor shortcuts
+    setup_kiosk_keybindings()
+
+    # Auto-install webkit if needed
+    try:
+        import gi
+        gi.require_version('WebKit2', '4.1')
+    except:
+        subprocess.run(['sudo', 'apt-get', 'install', '-y', 'gir1.2-webkit2-4.1'],
+                      capture_output=True, timeout=120)
+
+    # Start in separate process
+    import multiprocessing
+    p = multiprocessing.Process(target=run_kiosk_gui, daemon=True)
+    p.start()
+    logging.info(f"Kiosk started (PID: {p.pid})")
+    return p
+
+# ============================================================================
 
 # Helper function to get system time with fresh timezone
 def get_system_time():
@@ -2670,6 +2775,9 @@ def main():
     timeout_thread = threading.Thread(target=check_timeout)
     timeout_thread.daemon = True
     timeout_thread.start()
+
+    # Start the fullscreen kiosk GUI (if display is available)
+    start_kiosk()
 
     while True:
         execute_web_commands()
