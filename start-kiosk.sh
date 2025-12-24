@@ -2,11 +2,6 @@
 # Omnicon Kiosk Mode Launcher
 # Waits for web GUI to be ready, then launches Chromium in kiosk mode
 
-# Source user environment if available
-if [ -f "$HOME/.profile" ]; then
-    . "$HOME/.profile"
-fi
-
 # Wait for the web GUI to be available (max 60 seconds)
 echo "Waiting for Omnicon Web GUI to start..."
 for i in {1..60}; do
@@ -17,24 +12,15 @@ for i in {1..60}; do
     sleep 1
 done
 
-# Small delay to ensure everything is fully loaded
 sleep 2
 
-# Kill any existing Chromium instances to ensure kiosk mode works
+# Kill any existing Chromium instances
 pkill -f chromium 2>/dev/null
 sleep 1
 
-# Disable screen blanking/power saving
-xset s off 2>/dev/null
-xset -dpms 2>/dev/null
-xset s noblank 2>/dev/null
-
-# Launch Chromium in app mode (kiosk-like but compatible with Wayland)
-exec chromium-browser \
-    --app=http://localhost:8080 \
-    --start-maximized \
-    --window-size=1920,1080 \
-    --window-position=0,0 \
+# Launch Chromium in background, then send F11 to make it fullscreen
+chromium-browser \
+    --new-window \
     --noerrdialogs \
     --disable-infobars \
     --no-first-run \
@@ -43,4 +29,10 @@ exec chromium-browser \
     --disable-features=TranslateUI \
     --password-store=basic \
     --disable-extensions \
-    --force-app-mode
+    http://localhost:8080 &
+
+# Wait for window to open, then press F11 for fullscreen
+sleep 3
+wtype -k F11 2>/dev/null || xdotool key F11 2>/dev/null
+
+wait
