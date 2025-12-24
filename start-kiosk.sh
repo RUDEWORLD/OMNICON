@@ -31,7 +31,7 @@ xset s noblank 2>/dev/null
 
 # Launch Chromium in kiosk mode
 exec chromium-browser \
-    --app=http://localhost:8080 \
+    --kiosk \
     --window-size=2048,1080 \
     --window-position=0,0 \
     --noerrdialogs \
@@ -41,4 +41,5 @@ exec chromium-browser \
     --disable-session-crashed-bubble \
     --disable-features=TranslateUI \
     --password-store=basic \
-    --disable-extensions
+    --disable-extensions \
+    http://localhost:8080
