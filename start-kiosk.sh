@@ -28,6 +28,8 @@ xset s noblank 2>/dev/null
 # --check-for-update-interval=31536000: Disable update checks (1 year)
 # --disable-session-crashed-bubble: Don't show crash recovery
 # --disable-features=TranslateUI: Disable translate popups
+# --password-store=basic: Disable keyring integration (prevents password popup)
+# --disable-extensions: Disable all extensions (prevents extension popups)
 
 exec chromium-browser \
     --kiosk \
@@ -37,5 +39,7 @@ exec chromium-browser \
     --check-for-update-interval=31536000 \
     --disable-session-crashed-bubble \
     --disable-features=TranslateUI \
+    --password-store=basic \
+    --disable-extensions \
     --start-fullscreen \
     http://localhost:8080
