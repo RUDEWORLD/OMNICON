@@ -15,6 +15,10 @@ done
 # Small delay to ensure everything is fully loaded
 sleep 2
 
+# Kill any existing Chromium instances to ensure kiosk mode works
+pkill -f chromium 2>/dev/null
+sleep 1
+
 # Disable screen blanking/power saving
 xset s off 2>/dev/null
 xset -dpms 2>/dev/null
