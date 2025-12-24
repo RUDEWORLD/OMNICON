@@ -29,9 +29,10 @@ xset s off 2>/dev/null
 xset -dpms 2>/dev/null
 xset s noblank 2>/dev/null
 
-# Launch Chromium in kiosk mode
+# Launch Chromium in app mode (kiosk-like but compatible with Wayland)
 exec chromium-browser \
-    --kiosk \
+    --app=http://localhost:8080 \
+    --start-maximized \
     --window-size=2048,1080 \
     --window-position=0,0 \
     --noerrdialogs \
@@ -42,4 +43,4 @@ exec chromium-browser \
     --disable-features=TranslateUI \
     --password-store=basic \
     --disable-extensions \
-    http://localhost:8080
+    --force-app-mode
