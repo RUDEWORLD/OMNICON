@@ -33,7 +33,7 @@ xset s noblank 2>/dev/null
 exec chromium-browser \
     --app=http://localhost:8080 \
     --start-maximized \
-    --window-size=2048,1080 \
+    --window-size=1920,1080 \
     --window-position=0,0 \
     --noerrdialogs \
     --disable-infobars \

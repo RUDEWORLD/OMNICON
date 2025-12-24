@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.050
+# V4.2.051
 # 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -95,7 +95,7 @@ X-GNOME-Autostart-enabled=true
         # Create/update wayfire.ini with kiosk window rules
         wayfire_config = os.path.join(home_dir, ".config", "wayfire.ini")
         wayfire_content = """[output:NOOP-1]
-mode = 2048x1080
+mode = 1920x1080
 position = 0,0
 transform = normal
 
