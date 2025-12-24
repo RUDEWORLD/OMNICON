@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.054
+# V4.2.055
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -219,22 +219,31 @@ def start_kiosk():
     # Ensure autologin is enabled
     ensure_autologin()
 
-    # Find display
-    if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
+    # Wait for display to be available (up to 60 seconds)
+    import pwd
+    uid = pwd.getpwnam('omnicon').pw_uid
+    runtime_dir = f"/run/user/{uid}"
+
+    for attempt in range(60):
+        if os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY'):
+            break
         try:
-            import pwd
-            uid = pwd.getpwnam('omnicon').pw_uid
-            runtime_dir = f"/run/user/{uid}"
-            for item in os.listdir(runtime_dir):
-                if item.startswith('wayland-') and not item.endswith('.lock'):
-                    os.environ['WAYLAND_DISPLAY'] = item
-                    os.environ['XDG_RUNTIME_DIR'] = runtime_dir
-                    break
+            if os.path.exists(runtime_dir):
+                for item in os.listdir(runtime_dir):
+                    if item.startswith('wayland-') and not item.endswith('.lock'):
+                        os.environ['WAYLAND_DISPLAY'] = item
+                        os.environ['XDG_RUNTIME_DIR'] = runtime_dir
+                        logging.info(f"Found display {item} after {attempt}s")
+                        break
         except:
             pass
 
+        if os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY'):
+            break
+        time.sleep(1)
+
     if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
-        logging.info("No display available - skipping kiosk")
+        logging.info("No display available after 60s - skipping kiosk")
         return None
 
     # Disable compositor shortcuts
