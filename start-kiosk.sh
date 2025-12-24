@@ -19,10 +19,11 @@ sleep 2
 pkill -f chromium 2>/dev/null
 sleep 1
 
-# Set display (ensures it opens on the right screen)
-export DISPLAY=:0
+# Set display for Wayland
+export WAYLAND_DISPLAY=wayland-1
+export XDG_SESSION_TYPE=wayland
 
-# Disable screen blanking/power saving
+# Disable screen blanking/power saving (X11 fallback)
 xset s off 2>/dev/null
 xset -dpms 2>/dev/null
 xset s noblank 2>/dev/null
@@ -50,4 +51,5 @@ exec chromium-browser \
     --disable-extensions \
     --start-fullscreen \
     --window-position=0,0 \
+    --ozone-platform=wayland \
     http://localhost:8080
