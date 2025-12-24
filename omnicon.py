@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.055
+# V4.2.056
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -52,7 +52,7 @@ def run_kiosk_gui():
     except:
         pass
 
-    # Create window
+    # Create fullscreen window
     window = Gtk.Window(title="Omnicon")
     window.set_decorated(False)
     window.fullscreen()
@@ -175,6 +175,14 @@ def setup_kiosk_keybindings():
         new_lines.append('binding_up = none')
         new_lines.append('binding_down = none')
 
+        # Force HDMI to 1920x1080 and mirror displays
+        new_lines.append('')
+        new_lines.append('# KIOSK MODE - force 1080p on HDMI')
+        new_lines.append('[output:HDMI-A-1]')
+        new_lines.append('mode = 1920x1080@60')
+        new_lines.append('[output:HDMI-A-2]')
+        new_lines.append('mode = 1920x1080@60')
+
         with open(config_file, 'w') as f:
             f.write('\n'.join(new_lines))
 
@@ -199,7 +207,7 @@ def restore_keybindings():
         logging.error(f"Failed to restore keybindings: {e}")
 
 def ensure_autologin():
-    """Ensure desktop autologin is enabled for kiosk mode."""
+    """Ensure desktop autologin and 1080p resolution for kiosk mode."""
     try:
         result = subprocess.run(['raspi-config', 'nonint', 'get_autologin'],
                                 capture_output=True, text=True)
