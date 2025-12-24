@@ -19,6 +19,9 @@ sleep 2
 pkill -f chromium 2>/dev/null
 sleep 1
 
+# Set display (ensures it opens on the right screen)
+export DISPLAY=:0
+
 # Disable screen blanking/power saving
 xset s off 2>/dev/null
 xset -dpms 2>/dev/null
@@ -46,4 +49,5 @@ exec chromium-browser \
     --password-store=basic \
     --disable-extensions \
     --start-fullscreen \
+    --window-position=0,0 \
     http://localhost:8080
