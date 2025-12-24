@@ -32,7 +32,8 @@ xset s noblank 2>/dev/null
 # Launch Chromium in kiosk mode
 exec chromium-browser \
     --app=http://localhost:8080 \
-    --start-fullscreen \
+    --window-size=2048,1080 \
+    --window-position=0,0 \
     --noerrdialogs \
     --disable-infobars \
     --no-first-run \
