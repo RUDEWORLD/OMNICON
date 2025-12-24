@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.039
+# V4.2.040
 # 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -30,6 +30,68 @@ import shutil
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
+
+# ============================================
+# KIOSK MODE AUTO-CONFIGURATION
+# ============================================
+def setup_kiosk_mode():
+    """Configure kiosk mode and auto-login if not already set"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        home_dir = os.path.expanduser("~")
+        autostart_dir = os.path.join(home_dir, ".config", "autostart")
+        autostart_file = os.path.join(autostart_dir, "omnicon-kiosk.desktop")
+
+        # Check if autostart file exists
+        if not os.path.exists(autostart_file):
+            logging.info("Setting up kiosk mode autostart...")
+
+            # Create autostart directory if needed
+            os.makedirs(autostart_dir, exist_ok=True)
+
+            # Create the autostart desktop entry
+            desktop_entry = """[Desktop Entry]
+Type=Application
+Name=Omnicon Kiosk
+Comment=Launch Omnicon Web GUI in kiosk mode
+Exec={}/start-kiosk.sh
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true
+""".format(script_dir)
+
+            with open(autostart_file, 'w') as f:
+                f.write(desktop_entry)
+
+            logging.info("Kiosk autostart file created")
+
+        # Check if auto-login is enabled (check lightdm config)
+        lightdm_conf = "/etc/lightdm/lightdm.conf"
+        autologin_enabled = False
+
+        if os.path.exists(lightdm_conf):
+            with open(lightdm_conf, 'r') as f:
+                content = f.read()
+                if 'autologin-user=' in content and '#autologin-user' not in content:
+                    autologin_enabled = True
+
+        if not autologin_enabled:
+            logging.info("Enabling auto-login for kiosk mode...")
+            try:
+                subprocess.run(
+                    ['sudo', 'raspi-config', 'nonint', 'do_boot_behaviour', 'B4'],
+                    check=True,
+                    capture_output=True
+                )
+                logging.info("Auto-login enabled successfully")
+            except subprocess.CalledProcessError as e:
+                logging.warning(f"Failed to enable auto-login: {e}")
+
+    except Exception as e:
+        logging.warning(f"Kiosk setup warning (non-fatal): {e}")
+
+# Run kiosk setup on startup
+setup_kiosk_mode()
 
 # Helper function to get system time with fresh timezone
 def get_system_time():
