@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.040
+# V4.2.041
 # 12/07/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -41,6 +41,11 @@ def setup_kiosk_mode():
         home_dir = os.path.expanduser("~")
         autostart_dir = os.path.join(home_dir, ".config", "autostart")
         autostart_file = os.path.join(autostart_dir, "omnicon-kiosk.desktop")
+        kiosk_script = os.path.join(script_dir, "start-kiosk.sh")
+
+        # Ensure start-kiosk.sh is executable
+        if os.path.exists(kiosk_script):
+            os.chmod(kiosk_script, 0o755)
 
         # Check if autostart file exists
         if not os.path.exists(autostart_file):
