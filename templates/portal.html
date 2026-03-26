@@ -15,20 +15,48 @@
                         <button class="btn btn-sm btn-outline-dark" onclick="checkInternet()">
                             <i class="fas fa-check-circle"></i> Check Connection
                         </button>
-                        <a href="/" class="btn btn-sm btn-outline-dark ms-2">
-                            <i class="fas fa-arrow-left"></i> Back to Dashboard
+                        <button class="btn btn-sm btn-outline-dark ms-1" onclick="detectPortal()">
+                            <i class="fas fa-sync"></i> Retry
+                        </button>
+                        <a href="/" class="btn btn-sm btn-outline-dark ms-1">
+                            <i class="fas fa-arrow-left"></i> Dashboard
                         </a>
                     </div>
                 </div>
-                <div class="card-body p-0">
-                    <div id="portalStatus" class="alert alert-info m-3">
-                        <i class="fas fa-spinner fa-spin"></i> Detecting captive portal...
+                <div class="card-body">
+                    <div id="portalStatus" class="text-center p-4">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p class="mt-3">Detecting captive portal...</p>
                     </div>
-                    <div id="portalContainer" style="display: none;">
-                        <div class="alert alert-warning m-3 mb-0">
-                            <small><i class="fas fa-info-circle"></i> This page is loaded through your device. Complete the login below to grant your device internet access. Some portals may not display perfectly.</small>
+                    <div id="portalDetected" style="display: none;">
+                        <div class="alert alert-warning">
+                            <h5><i class="fas fa-exclamation-triangle"></i> Captive Portal Detected</h5>
+                            <p>This WiFi network requires a login page before internet access is granted to your device.</p>
                         </div>
-                        <iframe id="portalFrame" style="width: 100%; height: 70vh; border: none; margin: 0;"></iframe>
+                        <div class="card bg-light mb-3">
+                            <div class="card-body">
+                                <h6><i class="fas fa-magic"></i> Option 1: Open Portal Directly (Recommended)</h6>
+                                <p class="text-muted mb-2">Open the portal link below in this browser. The link contains your device's identity so the portal will authenticate your device.</p>
+                                <a id="portalDirectLink" href="#" target="_blank" class="btn btn-primary btn-lg w-100">
+                                    <i class="fas fa-external-link-alt"></i> Open Portal Login Page
+                                </a>
+                            </div>
+                        </div>
+                        <div class="card bg-light mb-3">
+                            <div class="card-body">
+                                <h6><i class="fas fa-info-circle"></i> Option 2: Manual</h6>
+                                <p class="text-muted mb-2">If the button above doesn't work, copy this URL and paste it in a new browser tab:</p>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="portalUrlText" readonly>
+                                    <button class="btn btn-outline-secondary" onclick="copyPortalUrl()">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="alert alert-info">
+                            <small><i class="fas fa-info-circle"></i> After completing the portal login, click <strong>Check Connection</strong> above to verify your device has internet access.</small>
+                        </div>
                     </div>
                     <div id="noPortal" style="display: none;" class="text-center p-5">
                         <i class="fas fa-check-circle text-success" style="font-size: 48px;"></i>
@@ -36,14 +64,11 @@
                         <p class="text-muted">Your device has internet access. No login is required.</p>
                         <a href="/" class="btn btn-primary">Back to Dashboard</a>
                     </div>
-                    <div id="portalError" style="display: none;" class="text-center p-5">
-                        <i class="fas fa-exclamation-triangle text-warning" style="font-size: 48px;"></i>
-                        <h4 class="mt-3">Portal Detected</h4>
-                        <p class="text-muted">A captive portal was detected but could not be loaded through the proxy.</p>
-                        <p>Portal URL: <code id="portalUrlDisplay">--</code></p>
-                        <button class="btn btn-warning" onclick="retryPortal()">
-                            <i class="fas fa-sync"></i> Retry
-                        </button>
+                    <div id="internetOk" style="display: none;" class="text-center p-5">
+                        <i class="fas fa-check-circle text-success" style="font-size: 48px;"></i>
+                        <h4 class="mt-3">Connected!</h4>
+                        <p class="text-muted">Your device now has internet access.</p>
+                        <a href="/" class="btn btn-primary">Back to Dashboard</a>
                     </div>
                 </div>
             </div>
@@ -52,62 +77,44 @@
 </div>
 
 <script>
-var portalUrl = null;
-
 function detectPortal() {
-    $('#portalStatus').show().html('<i class="fas fa-spinner fa-spin"></i> Detecting captive portal...');
-    $('#portalContainer').hide();
+    $('#portalStatus').show();
+    $('#portalDetected').hide();
     $('#noPortal').hide();
-    $('#portalError').hide();
+    $('#internetOk').hide();
 
     $.ajax({
         url: '/api/wifi/check-portal',
         method: 'GET',
-        timeout: 10000,
+        timeout: 15000,
         success: function(data) {
+            $('#portalStatus').hide();
             if (data.captive_portal && data.portal_url) {
-                portalUrl = data.portal_url;
-                loadPortal(data.portal_url);
+                $('#portalDirectLink').attr('href', data.portal_url);
+                $('#portalUrlText').val(data.portal_url);
+                $('#portalDetected').show();
             } else if (data.captive_portal) {
-                // Portal detected but no URL - try the default check URL
-                portalUrl = 'http://connectivitycheck.gstatic.com/generate_204';
-                loadPortal(portalUrl);
+                $('#portalDirectLink').attr('href', 'http://detectportal.firefox.com/canonical.html');
+                $('#portalUrlText').val('http://detectportal.firefox.com/canonical.html');
+                $('#portalDetected').show();
             } else {
-                $('#portalStatus').hide();
                 $('#noPortal').show();
             }
         },
         error: function() {
-            // Network error likely means captive portal
-            portalUrl = 'http://connectivitycheck.gstatic.com/generate_204';
-            loadPortal(portalUrl);
-        }
-    });
-}
-
-function loadPortal(url) {
-    $('#portalStatus').html('<i class="fas fa-spinner fa-spin"></i> Loading portal page...');
-    var proxyUrl = '/api/portal/proxy?url=' + encodeURIComponent(url);
-    $('#portalFrame').attr('src', proxyUrl);
-    $('#portalFrame').on('load', function() {
-        $('#portalStatus').hide();
-        $('#portalContainer').show();
-    });
-    // Fallback if load event doesn't fire
-    setTimeout(function() {
-        if ($('#portalStatus').is(':visible')) {
             $('#portalStatus').hide();
-            $('#portalContainer').show();
+            $('#portalDirectLink').attr('href', 'http://detectportal.firefox.com/canonical.html');
+            $('#portalUrlText').val('http://detectportal.firefox.com/canonical.html');
+            $('#portalDetected').show();
         }
-    }, 5000);
+    });
 }
 
-function retryPortal() {
-    if (portalUrl) {
-        loadPortal(portalUrl);
-    } else {
-        detectPortal();
-    }
+function copyPortalUrl() {
+    var urlText = document.getElementById('portalUrlText');
+    urlText.select();
+    document.execCommand('copy');
+    showToast('Copied', 'Portal URL copied to clipboard', 'success');
 }
 
 function checkInternet() {
@@ -117,9 +124,11 @@ function checkInternet() {
         timeout: 10000,
         success: function(data) {
             if (!data.captive_portal && data.internet) {
-                alert('Internet access confirmed! You can return to the dashboard.');
+                $('#portalDetected').hide();
+                $('#noPortal').hide();
+                $('#internetOk').show();
             } else {
-                alert('Still behind captive portal. Please complete the login below.');
+                alert('Still behind captive portal. Please complete the login using the link above.');
             }
         },
         error: function() {

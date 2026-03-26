@@ -1571,20 +1571,28 @@ def api_wifi_connect():
             except Exception as e:
                 logging.warning(f"Could not set WiFi priority: {e}")
 
-            # Check for captive portal
+            # Check for captive portal using Firefox detection method
             captive_portal = False
             portal_url = None
             try:
-                import urllib.request
-                req = urllib.request.Request("http://connectivitycheck.gstatic.com/generate_204")
-                resp = urllib.request.urlopen(req, timeout=5)
-                if resp.status != 204:
+                portal_resp = requests.get("http://detectportal.firefox.com/canonical.html",
+                                          timeout=5, allow_redirects=False)
+                if portal_resp.status_code in (301, 302, 303, 307, 308):
                     captive_portal = True
-                    portal_url = resp.url
-            except Exception as e:
-                # If redirected, urllib may throw or return the portal page
+                    portal_url = portal_resp.headers.get('Location', '')
+                elif portal_resp.status_code == 200:
+                    import re
+                    body = portal_resp.text
+                    match = re.search(r'URL=([^">\s]+)', body, re.IGNORECASE)
+                    if match:
+                        captive_portal = True
+                        portal_url = match.group(1)
+                    elif 'success' not in body.lower():
+                        captive_portal = True
+                        portal_url = "http://detectportal.firefox.com/canonical.html"
+            except Exception:
                 captive_portal = True
-                portal_url = getattr(e, 'url', None) or "http://connectivitycheck.gstatic.com/generate_204"
+                portal_url = "http://detectportal.firefox.com/canonical.html"
 
             response_data = {"success": True, "message": f"Connected to {ssid}"}
             if captive_portal:
@@ -1683,24 +1691,179 @@ def api_wifi_enable():
 @app.route('/api/wifi/check-portal', methods=['GET'])
 @login_required
 def api_wifi_check_portal():
-    """Check if the current WiFi connection has a captive portal"""
-    try:
-        import urllib.request
-        req = urllib.request.Request("http://connectivitycheck.gstatic.com/generate_204")
-        resp = urllib.request.urlopen(req, timeout=5)
-        if resp.status == 204:
-            return jsonify({"captive_portal": False, "internet": True})
-        else:
-            return jsonify({"captive_portal": True, "portal_url": resp.url, "internet": False})
-    except Exception as e:
-        url = getattr(e, 'url', None)
-        return jsonify({"captive_portal": True, "portal_url": url, "internet": False})
+    """Check if the current WiFi connection has a captive portal using multiple methods"""
+    portal_url = None
 
-@app.route('/portal')
+    # Method 1: Firefox detection - check if response body contains a redirect
+    try:
+        resp = requests.get("http://detectportal.firefox.com/canonical.html",
+                           timeout=5, allow_redirects=False)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            portal_url = resp.headers.get('Location', '')
+        elif resp.status_code == 200:
+            expected = '<meta http-equiv="refresh"'
+            body = resp.text
+            if expected in body.lower() or 'success' not in body.lower():
+                # Portal injected a redirect page or unexpected content
+                import re
+                match = re.search(r'URL=([^">\s]+)', body, re.IGNORECASE)
+                if match:
+                    portal_url = match.group(1)
+                elif 'success' not in body.lower():
+                    portal_url = "http://detectportal.firefox.com/canonical.html"
+    except Exception:
+        pass
+
+    # Method 2: Apple detection
+    if not portal_url:
+        try:
+            resp = requests.get("http://captive.apple.com/hotspot-detect.html",
+                               timeout=5, allow_redirects=False)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                portal_url = resp.headers.get('Location', '')
+            elif resp.status_code == 200 and '<HTML>' not in resp.text.upper()[:200]:
+                portal_url = "http://captive.apple.com/hotspot-detect.html"
+        except Exception:
+            pass
+
+    # Method 3: Google 204 check
+    if not portal_url:
+        try:
+            resp = requests.get("http://connectivitycheck.gstatic.com/generate_204",
+                               timeout=5, allow_redirects=False)
+            if resp.status_code != 204:
+                portal_url = resp.headers.get('Location', "http://connectivitycheck.gstatic.com/generate_204")
+        except Exception:
+            pass
+
+    # Method 4: Try to actually reach the internet
+    if not portal_url:
+        try:
+            resp = requests.head("https://api.github.com", timeout=5)
+            if resp.status_code == 200:
+                return jsonify({"captive_portal": False, "internet": True})
+        except Exception:
+            # Can't reach internet but no portal detected
+            return jsonify({"captive_portal": True, "portal_url": None, "internet": False})
+
+    if portal_url:
+        logging.info(f"Captive portal detected: {portal_url}")
+        return jsonify({"captive_portal": True, "portal_url": portal_url, "internet": False})
+
+    return jsonify({"captive_portal": False, "internet": True})
+
+@app.route('/portal/frame')
 @login_required
-def portal_page():
-    """Serve the captive portal browser page"""
-    return render_template('portal.html')
+def portal_frame():
+    """Serve proxied portal content as a full standalone page for iframe loading"""
+    target_url = request.args.get('url')
+    if not target_url:
+        return "<html><body><p>No portal URL specified</p></body></html>"
+
+    try:
+        resp = requests.get(
+            target_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            },
+            allow_redirects=True,
+            timeout=15,
+            verify=False
+        )
+
+        content = resp.text
+        base_url = resp.url
+
+        from urllib.parse import urlparse, quote
+        import re
+
+        # Get the portal's origin to use as base href
+        parsed_base = urlparse(base_url)
+        portal_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+
+        # Inject <base href> pointing to the portal server so all relative
+        # URLs (JS, CSS, images, API calls) resolve to the portal server.
+        # Both the Pi and the user's browser are on the hotel WiFi so they
+        # can reach the portal server directly.
+        base_tag = f'<base href="{portal_origin}/" target="_self">'
+
+        if '<head>' in content:
+            content = content.replace('<head>', '<head>' + base_tag, 1)
+        elif '<HEAD>' in content:
+            content = content.replace('<HEAD>', '<HEAD>' + base_tag, 1)
+        else:
+            content = base_tag + content
+
+        # Rewrite form actions to go through the Pi's proxy so the portal
+        # authenticates the Pi's MAC address, not the user's browser
+        def rewrite_action(match):
+            action = match.group(1)
+            if not action or action.startswith('#') or action.startswith('javascript:'):
+                return match.group(0)
+            if action.startswith('http'):
+                full_url = action
+            elif action.startswith('/'):
+                full_url = f"{portal_origin}{action}"
+            else:
+                full_url = f"{portal_origin}/{action}"
+            return f'action="/portal/frame?url={quote(full_url, safe="")}"'
+
+        content = re.sub(r'action=["\']([^"\']*)["\']', rewrite_action, content, flags=re.IGNORECASE)
+
+        # Inject a script to intercept form submissions and XHR POSTs
+        # so they go through the Pi (authenticating the Pi's MAC)
+        intercept_script = f"""
+        <script>
+        (function() {{
+            // Intercept form submissions
+            document.addEventListener('submit', function(e) {{
+                var form = e.target;
+                if (form.method && form.method.toUpperCase() === 'POST') {{
+                    e.preventDefault();
+                    var action = form.action || window.location.href;
+                    // Route through Pi proxy
+                    var proxyUrl = '/portal/frame?url=' + encodeURIComponent(action);
+                    var formData = new FormData(form);
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('POST', proxyUrl);
+                    xhr.onload = function() {{
+                        document.documentElement.innerHTML = xhr.responseText;
+                    }};
+                    xhr.send(new URLSearchParams(formData));
+                }}
+            }}, true);
+
+            // Intercept XHR POST requests to route through Pi
+            var origXHROpen = XMLHttpRequest.prototype.open;
+            var origXHRSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function(method, url) {{
+                this._portalMethod = method;
+                this._portalUrl = url;
+                if (method.toUpperCase() === 'POST' && url.indexOf('{portal_origin}') !== -1) {{
+                    var proxyUrl = '/api/portal/proxy?url=' + encodeURIComponent(url);
+                    return origXHROpen.apply(this, [method, proxyUrl].concat(Array.prototype.slice.call(arguments, 2)));
+                }}
+                return origXHROpen.apply(this, arguments);
+            }};
+        }})();
+        </script>
+        """
+
+        # Inject before </body> or at the end
+        if '</body>' in content.lower():
+            content = content.replace('</body>', intercept_script + '</body>', 1)
+            content = content.replace('</BODY>', intercept_script + '</BODY>', 1)
+        else:
+            content += intercept_script
+
+        from flask import Response
+        return Response(content, content_type='text/html; charset=utf-8')
+
+    except Exception as e:
+        logging.error(f"Portal frame error: {e}")
+        return f"<html><body><h3>Error loading portal</h3><p>{str(e)}</p></body></html>", 500
 
 @app.route('/api/portal/proxy', methods=['GET', 'POST'])
 @login_required

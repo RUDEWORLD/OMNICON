@@ -1379,12 +1379,11 @@ function connectToWifi() {
         timeout: 45000,
         success: function(data) {
             if (data.captive_portal) {
-                // Captive portal detected - show portal login option
-                showToast('Warning', 'Connected to ' + ssid + ' but a login page is required', 'warning');
+                // Captive portal detected - store the URL and notify user
+                showToast('Warning', 'Connected to ' + ssid + ' — login page required. Use the Captive Portal Login button.', 'warning');
                 bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
-                if (confirm('This network requires a login page (captive portal). Open the portal login now?')) {
-                    window.location.href = '/portal';
-                }
+                // Store portal URL for the captive portal button
+                window._captivePortalUrl = data.portal_url || null;
             } else {
                 showToast('Success', data.message || 'Connected to ' + ssid, 'success');
                 bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
