@@ -534,16 +534,29 @@ function selectOmniconVersion(version) {
 }
 
 // Perform Omnicon update
-// Auto-reload page after an update by polling until the server is back
+// Auto-reload page after an update by polling until the version changes
 function waitForRestartAndReload(delayMs) {
     delayMs = delayMs || 5000;
+    // Capture current versions before update
+    var oldOmnicon = $('#currentOmniconVersion').text() || '--';
+    var oldCompanion = $('#companionVersion').text() || '--';
+    var oldSatellite = $('#satelliteVersion').text() || '--';
+
     setTimeout(function poll() {
         $.ajax({
             url: '/api/versions',
             method: 'GET',
             timeout: 3000,
-            success: function() {
-                location.reload();
+            success: function(data) {
+                var newOmnicon = data.omnicon || '--';
+                var newCompanion = data.companion || '--';
+                var newSatellite = data.satellite || '--';
+                // Reload only if at least one version actually changed
+                if (newOmnicon !== oldOmnicon || newCompanion !== oldCompanion || newSatellite !== oldSatellite) {
+                    location.reload();
+                } else {
+                    setTimeout(poll, 2000);
+                }
             },
             error: function() {
                 setTimeout(poll, 2000);
