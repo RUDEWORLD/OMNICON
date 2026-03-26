@@ -431,8 +431,23 @@ def load_state():
         }
 
 def is_connected():
+    # Try multiple methods to detect internet connectivity
+    # Method 1: HTTP HEAD request to GitHub (what we actually need to reach)
     try:
-        # Try to connect to a known server (Google DNS)
+        import urllib.request
+        req = urllib.request.Request("https://api.github.com", method="HEAD")
+        urllib.request.urlopen(req, timeout=5)
+        return True
+    except Exception:
+        pass
+    # Method 2: Try connecting to common HTTPS port
+    try:
+        socket.create_connection(("github.com", 443), timeout=3)
+        return True
+    except OSError:
+        pass
+    # Method 3: Original DNS check as fallback
+    try:
         socket.create_connection(("8.8.8.8", 53), timeout=2)
         return True
     except OSError:

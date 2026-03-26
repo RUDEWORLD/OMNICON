@@ -725,10 +725,22 @@ def api_ntp_sync():
     """Sync system time from NTP server"""
     try:
         # First check if we have internet connectivity
+        internet_ok = False
         try:
-            import socket
-            socket.create_connection(("8.8.8.8", 53), timeout=3)
-        except OSError:
+            import urllib.request
+            req = urllib.request.Request("https://api.github.com", method="HEAD")
+            urllib.request.urlopen(req, timeout=5)
+            internet_ok = True
+        except Exception:
+            pass
+        if not internet_ok:
+            try:
+                import socket
+                socket.create_connection(("github.com", 443), timeout=3)
+                internet_ok = True
+            except OSError:
+                pass
+        if not internet_ok:
             return jsonify({"success": False, "error": "No internet connection"}), 400
 
         # Enable NTP and force sync
