@@ -987,150 +987,162 @@ function loadApplicationVersions() {
     checkOmniconVersion();
 }
 
-// Show Companion update options
+// Show update modal for Companion or Satellite
+function showAppUpdateModal(app) {
+    var title = app === 'companion' ? 'Update Companion' : 'Update Satellite';
+    var modalId = app + 'UpdateModal';
+
+    // Remove old modal if it exists
+    $('#' + modalId).remove();
+
+    var modalHtml = `
+        <div class="modal fade" id="${modalId}" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="fas fa-download"></i> ${title}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="${app}UpdateTypeSelect">
+                            <p class="mb-3">Current version: <strong id="${app}CurrentVer">--</strong></p>
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-success" onclick="triggerAppUpdate('${app}', 'stable')">
+                                    <i class="fas fa-shield-alt"></i> Latest Stable
+                                </button>
+                                <button class="btn btn-warning" onclick="triggerAppUpdate('${app}', 'beta')">
+                                    <i class="fas fa-flask"></i> Latest Beta
+                                </button>
+                                <button class="btn btn-info" onclick="loadSpecificVersions('${app}', 'stable')">
+                                    <i class="fas fa-list"></i> Specific Stable Version
+                                </button>
+                                <button class="btn btn-secondary" onclick="loadSpecificVersions('${app}', 'beta')">
+                                    <i class="fas fa-list"></i> Specific Beta Version
+                                </button>
+                                <button class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                                    <i class="fas fa-times"></i> Cancel
+                                </button>
+                            </div>
+                        </div>
+                        <div id="${app}VersionList" style="display: none;">
+                            <button class="btn btn-sm btn-outline-secondary mb-3" onclick="showUpdateTypeSelect('${app}')">
+                                <i class="fas fa-arrow-left"></i> Back
+                            </button>
+                            <p class="mb-2"><strong id="${app}VersionListTitle">Available Versions</strong></p>
+                            <div id="${app}VersionListLoading" class="text-center">
+                                <div class="spinner-border text-primary" role="status"></div>
+                                <p class="mt-2">Fetching versions...</p>
+                            </div>
+                            <div class="list-group" id="${app}Versions" style="max-height: 300px; overflow-y: auto;"></div>
+                        </div>
+                        <div id="${app}UpdateProgress" style="display: none;">
+                            <div class="text-center">
+                                <div class="spinner-border text-primary" role="status"></div>
+                                <p class="mt-3" id="${app}UpdateMsg">Updating...</p>
+                                <p class="text-muted">Check OLED for progress. System will reboot when complete.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    $('body').append(modalHtml);
+
+    // Fetch current version
+    $.get('/api/versions', function(data) {
+        var ver = app === 'companion' ? data.companion : data.satellite;
+        $('#' + app + 'CurrentVer').text(ver || 'Unknown');
+    });
+
+    var modal = new bootstrap.Modal(document.getElementById(modalId));
+    modal.show();
+}
+
+function showUpdateTypeSelect(app) {
+    $('#' + app + 'VersionList').hide();
+    $('#' + app + 'UpdateTypeSelect').show();
+}
+
+function loadSpecificVersions(app, branch) {
+    $('#' + app + 'UpdateTypeSelect').hide();
+    $('#' + app + 'VersionList').show();
+    $('#' + app + 'VersionListLoading').show();
+    $('#' + app + 'Versions').empty();
+    $('#' + app + 'VersionListTitle').text('Available ' + branch.charAt(0).toUpperCase() + branch.slice(1) + ' Versions');
+
+    $.ajax({
+        url: '/api/' + app + '/available-versions?branch=' + branch,
+        method: 'GET',
+        timeout: 15000,
+        success: function(data) {
+            $('#' + app + 'VersionListLoading').hide();
+            if (!data.success || !data.versions || data.versions.length === 0) {
+                $('#' + app + 'Versions').html('<div class="text-center text-muted p-3">No versions found</div>');
+                return;
+            }
+            var currentVer = data.current_version;
+            data.versions.forEach(function(v) {
+                var isCurrent = v.version.replace(/^v/, '') === currentVer;
+                var dateStr = new Date(v.published).toLocaleDateString();
+                var badge = isCurrent ? ' <span class="badge bg-success">Installed</span>' : '';
+                var btnClass = isCurrent ? 'list-group-item-secondary' : 'list-group-item-action';
+                $('#' + app + 'Versions').append(
+                    '<a href="#" class="list-group-item ' + btnClass + '" onclick="triggerAppUpdate(\'' + app + '\', \'version\', \'' + v.version + '\'); return false;">' +
+                    '<div class="d-flex justify-content-between align-items-center">' +
+                    '<strong>' + v.version + '</strong>' + badge +
+                    '<small class="text-muted">' + dateStr + '</small>' +
+                    '</div></a>'
+                );
+            });
+        },
+        error: function(xhr) {
+            $('#' + app + 'VersionListLoading').hide();
+            $('#' + app + 'Versions').html('<div class="text-center text-danger p-3">Failed to fetch versions. Check internet connection.</div>');
+        }
+    });
+}
+
+function triggerAppUpdate(app, type, version) {
+    var label = type === 'version' ? version : type;
+    if (!confirm('Update ' + app.charAt(0).toUpperCase() + app.slice(1) + ' to ' + label + '? The system will restart.')) {
+        return;
+    }
+
+    // Show progress
+    $('#' + app + 'UpdateTypeSelect').hide();
+    $('#' + app + 'VersionList').hide();
+    $('#' + app + 'UpdateProgress').show();
+    $('#' + app + 'UpdateMsg').text('Updating ' + app.charAt(0).toUpperCase() + app.slice(1) + ' to ' + label + '...');
+
+    var postData = { type: type };
+    if (type === 'version' && version) {
+        postData.version = version;
+    }
+
+    $.ajax({
+        url: '/api/' + app + '/update',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(postData),
+        success: function(data) {
+            showToast('Success', data.message, 'success');
+        },
+        error: function(xhr) {
+            $('#' + app + 'UpdateProgress').hide();
+            $('#' + app + 'UpdateTypeSelect').show();
+            var response = xhr.responseJSON;
+            showToast('Error', response?.error || 'Failed to start update', 'error');
+        }
+    });
+}
+
 function showCompanionUpdate() {
-    // Create modal HTML if it doesn't exist
-    if (!$('#companionUpdateModal').length) {
-        const modalHtml = `
-            <div class="modal fade" id="companionUpdateModal" tabindex="-1">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Update Companion</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div id="companionUpdateOptions">
-                                <p>Update Companion to the latest stable version?</p>
-                                <div class="d-grid gap-2">
-                                    <button class="btn btn-primary" onclick="updateCompanion('stable')">
-                                        <i class="fas fa-shield-alt"></i> Update to Current Stable
-                                    </button>
-                                    <button class="btn btn-secondary" data-bs-dismiss="modal">
-                                        <i class="fas fa-times"></i> Cancel
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="companionUpdateProgress" style="display: none;">
-                                <div class="text-center">
-                                    <div class="spinner-border text-primary" role="status">
-                                        <span class="visually-hidden">Updating...</span>
-                                    </div>
-                                    <p class="mt-3">Updating Companion...</p>
-                                    <p class="text-muted">Check OLED for progress. System will reboot when complete.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        $('body').append(modalHtml);
-    }
-
-    const modal = new bootstrap.Modal(document.getElementById('companionUpdateModal'));
-    modal.show();
+    showAppUpdateModal('companion');
 }
 
-// Show Satellite update options
 function showSatelliteUpdate() {
-    // Create modal HTML if it doesn't exist
-    if (!$('#satelliteUpdateModal').length) {
-        const modalHtml = `
-            <div class="modal fade" id="satelliteUpdateModal" tabindex="-1">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Update Satellite</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div id="satelliteUpdateOptions">
-                                <p>Update Satellite to the latest stable version?</p>
-                                <div class="d-grid gap-2">
-                                    <button class="btn btn-primary" onclick="updateSatellite('stable')">
-                                        <i class="fas fa-shield-alt"></i> Update to Current Stable
-                                    </button>
-                                    <button class="btn btn-secondary" data-bs-dismiss="modal">
-                                        <i class="fas fa-times"></i> Cancel
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="satelliteUpdateProgress" style="display: none;">
-                                <div class="text-center">
-                                    <div class="spinner-border text-warning" role="status">
-                                        <span class="visually-hidden">Updating...</span>
-                                    </div>
-                                    <p class="mt-3">Updating Satellite...</p>
-                                    <p class="text-muted">Check OLED for progress. System will reboot when complete.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        $('body').append(modalHtml);
-    }
-
-    const modal = new bootstrap.Modal(document.getElementById('satelliteUpdateModal'));
-    modal.show();
-}
-
-// Update Companion
-function updateCompanion(type) {
-    if (!confirm(`Update Companion to ${type} version? The system will restart.`)) {
-        return;
-    }
-
-    // Hide options, show progress
-    $('#companionUpdateOptions').hide();
-    $('#companionUpdateProgress').show();
-
-    $.ajax({
-        url: '/api/companion/update',
-        method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({ type: type }),
-        success: function(data) {
-            showToast('Success', data.message, 'success');
-            // Modal will stay open showing progress until system reboots
-        },
-        error: function(xhr) {
-            $('#companionUpdateOptions').show();
-            $('#companionUpdateProgress').hide();
-            const response = xhr.responseJSON;
-            showToast('Error', response?.error || 'Failed to start update', 'error');
-        }
-    });
-}
-
-// Update Satellite
-function updateSatellite(type) {
-    if (!confirm(`Update Satellite to ${type} version? The system will restart.`)) {
-        return;
-    }
-
-    // Hide options, show progress
-    $('#satelliteUpdateOptions').hide();
-    $('#satelliteUpdateProgress').show();
-
-    $.ajax({
-        url: '/api/satellite/update',
-        method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({ type: type }),
-        success: function(data) {
-            showToast('Success', data.message, 'success');
-            // Modal will stay open showing progress until system reboots
-        },
-        error: function(xhr) {
-            $('#satelliteUpdateOptions').show();
-            $('#satelliteUpdateProgress').hide();
-            const response = xhr.responseJSON;
-            showToast('Error', response?.error || 'Failed to start update', 'error');
-        }
-    });
+    showAppUpdateModal('satellite');
 }
 
 // =============================================

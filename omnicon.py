@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.062
+# V4.2.063
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -389,6 +389,12 @@ selected_version = None  # Initialize selected_version at the global level
 updating_application = False
 oled_lock = threading.Lock()
 
+# Companion/Satellite version picker globals
+app_version_list = []  # List of version strings fetched from Bitfocus API
+app_version_scroll = 0  # Current scroll position in the version list
+app_version_cursor = 0  # Cursor position (0-2, which of the 3 visible items is selected)
+app_version_target = ""  # "companion" or "satellite"
+
 # Function to get current version from the script
 def get_current_version():
     script_path = sys.argv[0]  # Get the current script path
@@ -453,6 +459,27 @@ def is_connected():
     except OSError:
         pass
     return False
+
+
+def fetch_bitfocus_versions(product):
+    """Fetch available stable versions from Bitfocus API for companion or satellite.
+    product: 'companion' or 'companion-satellite'
+    Returns list of version strings like ['v2.8.0', 'v2.7.0', ...]"""
+    try:
+        import urllib.request
+        target = "linux-arm64-tgz"
+        url = f"https://api.bitfocus.io/v1/product/{product}/packages?branch=stable&limit=10&target={target}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        versions = []
+        for pkg in data.get('packages', []):
+            if pkg.get('target') == target:
+                versions.append(pkg['version'])
+        return versions
+    except Exception as e:
+        logging.error(f"Error fetching Bitfocus versions for {product}: {e}")
+        return []
 
 
 # Function to save state to file
@@ -666,8 +693,8 @@ message_displayed = False
 main_menu = ["APPLICATION", "CONFIGURATION", "POWER", "EXIT"]
 application_menu = ["RUN COMPANION", "RUN SATELLITE", "UPDATE APPS", "EXIT"]
 app_updates_menu = ["UPDATE APP", "COMPANION", "SATELLITE", "EXIT"]
-app_update_companion_menu = ["UPDATE COMPANION", "CURRENT STABLE", "", "CANCEL"]
-app_update_satellite_menu = ["UPDATE SATELLITE", "CURRENT STABLE", "", "CANCEL"]
+app_update_companion_menu = ["UPDATE COMPANION", "LATEST STABLE", "SPECIFIC STABLE", "CANCEL"]
+app_update_satellite_menu = ["UPDATE SATELLITE", "LATEST STABLE", "SPECIFIC STABLE", "CANCEL"]
 configuration_menu = ["NETWORK", "SET DATE/TIME", "UPDATE", "EXIT"]
 network_menu = ["DHCP", "STATIC IP", "SET STATIC", "EXIT"]
 power_menu = ["REBOOT", "SHUTDOWN", "", "EXIT"]
@@ -699,8 +726,10 @@ menu_options = {
     "set_time": [],
     "upgrade_select": [],
     "downgrade_select": [],
-    "update_companion": ["UPDATE COMPANION", "CURRENT STABLE", "", "CANCEL"],
-    "update_satellite": ["UPDATE SATELLITE", "CURRENT STABLE", "", "CANCEL"],
+    "update_companion": ["UPDATE COMPANION", "LATEST STABLE", "SPECIFIC STABLE", "CANCEL"],
+    "update_satellite": ["UPDATE SATELLITE", "LATEST STABLE", "SPECIFIC STABLE", "CANCEL"],
+    "pick_companion_version": [],
+    "pick_satellite_version": [],
 
 }
 
@@ -1165,6 +1194,27 @@ def update_oled_display(force=False):
             local_draw.text((0, 48), "EXIT", font=font11, fill=255)
             local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
 
+        elif menu_state in ["pick_companion_version", "pick_satellite_version"]:
+            # Scrollable version picker: show 3 versions + EXIT
+            # K1=scroll up, K2=scroll down, K3=select, K4=back
+            if not app_version_list:
+                local_draw.text((0, 0), "NO VERSIONS", font=font11, fill=255)
+                local_draw.text((0, 48), "BACK", font=font11, fill=255)
+                local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+            else:
+                visible = app_version_list[app_version_scroll:app_version_scroll + 3]
+                for i, ver in enumerate(visible):
+                    prefix = "> " if i == app_version_cursor else "  "
+                    local_draw.text((0, i * 16), prefix + ver, font=font11, fill=255)
+                # Show scroll position and button hints
+                total = len(app_version_list)
+                pos_text = f"{app_version_scroll + app_version_cursor + 1}/{total}"
+                local_draw.text((45, 48), pos_text, font=font11, fill=255)
+                local_draw.text((0, 48), indicators["K3"], font=font11, fill=255)
+                local_draw.text((10, 48), "EXIT", font=font11, fill=255)
+                local_draw.text((88, 48), "SEL", font=font11, fill=255)
+                local_draw.text((112, 48), indicators["K4"], font=font11, fill=255)
+
         elif menu_state == "app_updates":
             options = menu_options[menu_state]
             for i, option in enumerate(options):
@@ -1286,6 +1336,7 @@ def debounce(func):
 @debounce
 def button_k1_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
+    global app_version_cursor, app_version_scroll
     logging.debug("K1 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1309,6 +1360,12 @@ def button_k1_pressed():
     elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Do nothing on short press
         pass
+    elif menu_state in ["pick_companion_version", "pick_satellite_version"]:
+        # K1 = scroll up
+        if app_version_cursor > 0:
+            app_version_cursor -= 1
+        elif app_version_scroll > 0:
+            app_version_scroll -= 1
     else:
         menu_selection = 0
         activate_menu_item()
@@ -1317,6 +1374,7 @@ def button_k1_pressed():
 @debounce
 def button_k2_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
+    global app_version_cursor, app_version_scroll
     logging.debug("K2 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1343,6 +1401,13 @@ def button_k2_pressed():
     elif menu_state in ["update_confirm", "downgrade_confirm"]:
         # Do nothing on short press
         pass
+    elif menu_state in ["pick_companion_version", "pick_satellite_version"]:
+        # K2 = scroll down
+        total = len(app_version_list)
+        if app_version_cursor < 2 and (app_version_scroll + app_version_cursor) < total - 1:
+            app_version_cursor += 1
+        elif (app_version_scroll + 3) < total:
+            app_version_scroll += 1
     else:
         menu_selection = 1
         activate_menu_item()
@@ -1350,7 +1415,8 @@ def button_k2_pressed():
 
 @debounce
 def button_k3_pressed():
-    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag
+    global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, updating_application
+    global app_version_list, app_version_scroll, app_version_cursor
     logging.debug("K3 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1375,6 +1441,13 @@ def button_k3_pressed():
         menu_state = "update"
         selected_version = None  # Reset selected_version
         # Don't call activate_menu_item here
+    elif menu_state in ["pick_companion_version", "pick_satellite_version"]:
+        # K3 = back/exit
+        if menu_state == "pick_companion_version":
+            menu_state = "update_companion"
+        else:
+            menu_state = "update_satellite"
+        menu_selection = 0
     else:
         # Only call activate_menu_item for normal menus with selectable options
         menu_selection = 2
@@ -1428,6 +1501,24 @@ def button_k4_pressed():
         show_message(result, duration)
         menu_state = "default"
         selected_version = None  # Reset selected_version
+    elif menu_state in ["pick_companion_version", "pick_satellite_version"]:
+        # K4 = select the highlighted version
+        idx = app_version_scroll + app_version_cursor
+        if idx < len(app_version_list):
+            selected_ver = app_version_list[idx]
+            app_name = "companion" if menu_state == "pick_companion_version" else "satellite"
+            update_cmd = f"sudo {app_name}-update stable {selected_ver}"
+            if is_connected():
+                show_message(f"UPDATING\n{app_name.upper()}\n{selected_ver}", 2)
+                updating_application = True
+                execute_command_with_progress(update_cmd)
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
     else:
         menu_selection = 3
         activate_menu_item()
@@ -2137,7 +2228,7 @@ def execute_web_commands():
                 show_message("UPDATING\nCOMPANION", 2)
                 global updating_application
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
@@ -2152,7 +2243,65 @@ def execute_web_commands():
             if is_connected():
                 show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                execute_command_with_progress('sudo satellite-update stable')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_companion_beta':
+            logging.info("Triggering Companion beta update via web")
+            if is_connected():
+                show_message("UPDATING\nCOMPANION BETA", 2)
+                updating_application = True
+                execute_command_with_progress('sudo companion-update beta')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_beta':
+            logging.info("Triggering Satellite beta update via web")
+            if is_connected():
+                show_message("UPDATING\nSATELLITE BETA", 2)
+                updating_application = True
+                execute_command_with_progress('sudo satellite-update beta')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_companion_version':
+            version = params.get('version', '')
+            logging.info(f"Triggering Companion update to specific version: {version}")
+            if is_connected() and version:
+                show_message(f"UPDATING\nCOMPANION\n{version}", 2)
+                updating_application = True
+                execute_command_with_progress(f'sudo companion-update stable {version}')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_version':
+            version = params.get('version', '')
+            logging.info(f"Triggering Satellite update to specific version: {version}")
+            if is_connected() and version:
+                show_message(f"UPDATING\nSATELLITE\n{version}", 2)
+                updating_application = True
+                execute_command_with_progress(f'sudo satellite-update stable {version}')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
@@ -2334,7 +2483,7 @@ def execute_web_commands():
                 show_message("UPDATING\nCOMPANION", 2)
                 global updating_application
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
@@ -2349,7 +2498,65 @@ def execute_web_commands():
             if is_connected():
                 show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                execute_command_with_progress('sudo satellite-update stable')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_companion_beta':
+            logging.info("Triggering Companion beta update via web")
+            if is_connected():
+                show_message("UPDATING\nCOMPANION BETA", 2)
+                updating_application = True
+                execute_command_with_progress('sudo companion-update beta')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_beta':
+            logging.info("Triggering Satellite beta update via web")
+            if is_connected():
+                show_message("UPDATING\nSATELLITE BETA", 2)
+                updating_application = True
+                execute_command_with_progress('sudo satellite-update beta')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_companion_version':
+            version = params.get('version', '')
+            logging.info(f"Triggering Companion update to specific version: {version}")
+            if is_connected() and version:
+                show_message(f"UPDATING\nCOMPANION\n{version}", 2)
+                updating_application = True
+                execute_command_with_progress(f'sudo companion-update stable {version}')
+                updating_application = False
+                show_message("REBOOTING...", 2)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+
+        elif command == 'update_satellite_version':
+            version = params.get('version', '')
+            logging.info(f"Triggering Satellite update to specific version: {version}")
+            if is_connected() and version:
+                show_message(f"UPDATING\nSATELLITE\n{version}", 2)
+                updating_application = True
+                execute_command_with_progress(f'sudo satellite-update stable {version}')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
@@ -2754,7 +2961,7 @@ def process_web_commands():
                             show_message("UPDATING\nCOMPANION", 2)
                             global updating_application
                             updating_application = True
-                            execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                            execute_command_with_progress('sudo companion-update stable')
                             updating_application = False
                             show_message("REBOOTING...", 2)
                             turn_off_oled()
@@ -2768,7 +2975,61 @@ def process_web_commands():
                         if is_connected():
                             show_message("UPDATING\nSATELLITE", 2)
                             updating_application = True
-                            execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                            execute_command_with_progress('sudo satellite-update stable')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
+
+                    elif command == 'update_companion_beta':
+                        logging.info("Triggering Companion beta update via web")
+                        if is_connected():
+                            show_message("UPDATING\nCOMPANION BETA", 2)
+                            updating_application = True
+                            execute_command_with_progress('sudo companion-update beta')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
+
+                    elif command == 'update_satellite_beta':
+                        logging.info("Triggering Satellite beta update via web")
+                        if is_connected():
+                            show_message("UPDATING\nSATELLITE BETA", 2)
+                            updating_application = True
+                            execute_command_with_progress('sudo satellite-update beta')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
+
+                    elif command == 'update_companion_version':
+                        version = params.get('version', '')
+                        logging.info(f"Triggering Companion update to version: {version}")
+                        if is_connected() and version:
+                            show_message(f"UPDATING\nCOMPANION\n{version}", 2)
+                            updating_application = True
+                            execute_command_with_progress(f'sudo companion-update stable {version}')
+                            updating_application = False
+                            show_message("REBOOTING...", 2)
+                            turn_off_oled()
+                            execute_command("sudo reboot")
+                        else:
+                            show_message("PLEASE CONNECT\nTO INTERNET", 3)
+
+                    elif command == 'update_satellite_version':
+                        version = params.get('version', '')
+                        logging.info(f"Triggering Satellite update to version: {version}")
+                        if is_connected() and version:
+                            show_message(f"UPDATING\nSATELLITE\n{version}", 2)
+                            updating_application = True
+                            execute_command_with_progress(f'sudo satellite-update stable {version}')
                             updating_application = False
                             show_message("REBOOTING...", 2)
                             turn_off_oled()
@@ -2820,6 +3081,41 @@ def main():
 
     logging.info('Script started successfully')
 
+    # Auto-expand root filesystem if partition is much smaller than SD card
+    # This runs every boot but only takes action if expansion is needed.
+    # The size check is instant and raspi-config --expand-rootfs is a no-op
+    # on an already-expanded disk, so this is safe to run repeatedly.
+    try:
+        # Get total SD card size in bytes
+        with open('/sys/block/mmcblk0/size', 'r') as f:
+            card_sectors = int(f.read().strip())
+        card_size_gb = (card_sectors * 512) / (1024 ** 3)
+
+        # Get root partition size in bytes
+        with open('/sys/block/mmcblk0/mmcblk0p2/size', 'r') as f:
+            part_sectors = int(f.read().strip())
+        part_size_gb = (part_sectors * 512) / (1024 ** 3)
+
+        logging.info(f"Disk check: SD card={card_size_gb:.1f}GB, root partition={part_size_gb:.1f}GB")
+
+        # If the partition uses less than 80% of the card, expand it
+        if card_size_gb > 0 and (part_size_gb / card_size_gb) < 0.80:
+            logging.warning(f"Root partition ({part_size_gb:.1f}GB) is much smaller than SD card ({card_size_gb:.1f}GB) - auto-expanding")
+            show_message("EXPANDING\nDISK...", 3)
+            result = subprocess.run(["sudo", "raspi-config", "--expand-rootfs"],
+                                    capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                logging.info("Filesystem expand successful, rebooting to apply")
+                show_message("DISK EXPANDED\nREBOOTING...", 3)
+                turn_off_oled()
+                execute_command("sudo reboot")
+            else:
+                logging.error(f"Filesystem expand failed: {result.stderr}")
+        else:
+            logging.info("Disk size OK, no expansion needed")
+    except Exception as e:
+        logging.error(f"Disk expansion check failed: {e}")
+
     timeout_thread = threading.Thread(target=check_timeout)
     timeout_thread.daemon = True
     timeout_thread.start()
@@ -2862,6 +3158,7 @@ def check_timeout():
 
 def activate_menu_item():
     global menu_state, menu_selection, updating_application, ip_octet, ip_address, subnet_mask, gateway, original_ip_address, original_subnet_mask, original_gateway, last_interaction_time, timeout_flag, datetime_temp, available_versions, selected_version
+    global app_version_list, app_version_scroll, app_version_cursor, app_version_target
     options = menu_options.get(menu_state, [])
     selected_option = options[menu_selection]
 
@@ -2990,15 +3287,29 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "update_companion":
-        if selected_option == "CURRENT STABLE":
+        if selected_option == "LATEST STABLE":
             if is_connected():
                 show_message("UPDATING\nCOMPANION", 2)
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo companion-update')
+                execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
                 execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+        elif selected_option == "SPECIFIC STABLE":
+            if is_connected():
+                show_message("FETCHING\nVERSIONS...", 1)
+                app_version_list = fetch_bitfocus_versions("companion")
+                app_version_scroll = 0
+                app_version_cursor = 0
+                app_version_target = "companion"
+                if app_version_list:
+                    menu_state = "pick_companion_version"
+                else:
+                    show_message("NO VERSIONS\nFOUND", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -3007,15 +3318,29 @@ def activate_menu_item():
             menu_selection = 0
 
     elif menu_state == "update_satellite":
-        if selected_option == "CURRENT STABLE":
+        if selected_option == "LATEST STABLE":
             if is_connected():
                 show_message("UPDATING\nSATELLITE", 2)
                 updating_application = True
-                execute_command_with_progress('echo -e "\\033[A\\n" | sudo satellite-update')
+                execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
                 show_message("REBOOTING...", 2)
                 turn_off_oled()
                 execute_command("sudo reboot")
+            else:
+                show_message("PLEASE CONNECT\nTO INTERNET", 3)
+                menu_state = "default"
+        elif selected_option == "SPECIFIC STABLE":
+            if is_connected():
+                show_message("FETCHING\nVERSIONS...", 1)
+                app_version_list = fetch_bitfocus_versions("companion-satellite")
+                app_version_scroll = 0
+                app_version_cursor = 0
+                app_version_target = "satellite"
+                if app_version_list:
+                    menu_state = "pick_satellite_version"
+                else:
+                    show_message("NO VERSIONS\nFOUND", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"

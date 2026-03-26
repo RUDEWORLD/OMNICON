@@ -1206,18 +1206,113 @@ def api_get_versions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/companion/available-versions', methods=['GET'])
+@login_required
+def api_companion_available_versions():
+    """Fetch available Companion versions from Bitfocus API"""
+    try:
+        branch = request.args.get('branch', 'stable')
+        limit = request.args.get('limit', '10')
+        import urllib.request
+        url = f"https://api.bitfocus.io/v1/product/companion/packages?branch={branch}&limit={limit}&target=linux-arm64-tgz"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        # Get current installed version
+        current_version = 'Unknown'
+        try:
+            with open('/opt/companion/package.json', 'r') as f:
+                import re
+                pkg = json.load(f)
+                version = pkg.get('version', 'Unknown')
+                match = re.match(r'^(\d+\.\d+\.\d+)', version)
+                if match:
+                    current_version = match.group(1)
+        except:
+            pass
+
+        versions = []
+        for pkg in data.get('packages', []):
+            if pkg.get('target') == 'linux-arm64-tgz':
+                versions.append({
+                    'version': pkg['version'],
+                    'published': pkg['published'],
+                    'uri': pkg['uri']
+                })
+
+        return jsonify({
+            'success': True,
+            'current_version': current_version,
+            'versions': versions
+        })
+    except Exception as e:
+        logging.error(f"Error fetching companion versions: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/satellite/available-versions', methods=['GET'])
+@login_required
+def api_satellite_available_versions():
+    """Fetch available Satellite versions from Bitfocus API"""
+    try:
+        branch = request.args.get('branch', 'stable')
+        limit = request.args.get('limit', '10')
+        import urllib.request
+        url = f"https://api.bitfocus.io/v1/product/companion-satellite/packages?branch={branch}&limit={limit}&target=linux-arm64-tgz"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        # Get current installed version
+        current_version = 'Unknown'
+        try:
+            with open('/opt/companion-satellite/satellite/package.json', 'r') as f:
+                import re
+                pkg = json.load(f)
+                version = pkg.get('version', 'Unknown')
+                match = re.match(r'^(\d+\.\d+\.\d+)', version)
+                if match:
+                    current_version = match.group(1)
+        except:
+            pass
+
+        versions = []
+        for pkg in data.get('packages', []):
+            if pkg.get('target') == 'linux-arm64-tgz':
+                versions.append({
+                    'version': pkg['version'],
+                    'published': pkg['published'],
+                    'uri': pkg['uri']
+                })
+
+        return jsonify({
+            'success': True,
+            'current_version': current_version,
+            'versions': versions
+        })
+    except Exception as e:
+        logging.error(f"Error fetching satellite versions: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/companion/update', methods=['POST'])
 @login_required
 def api_update_companion():
-    """Update Companion to stable version only - triggers via omnicon.py for OLED feedback"""
+    """Update Companion - supports stable, beta, or specific version"""
     try:
-        # Send command to omnicon.py so OLED shows update progress
-        success = send_command_to_omnicon('update_companion_stable', {})
+        data = request.get_json() or {}
+        update_type = data.get('type', 'stable')
+        version = data.get('version', '')
+
+        if update_type in ('stable', 'beta'):
+            success = send_command_to_omnicon(f'update_companion_{update_type}', {})
+        else:
+            # Specific version
+            success = send_command_to_omnicon('update_companion_version', {'version': version})
 
         if success:
             return jsonify({
                 "success": True,
-                "message": "Starting Companion stable update. Check OLED for progress. System will reboot when complete."
+                "message": f"Starting Companion {update_type} update. Check OLED for progress. System will reboot when complete."
             })
         else:
             return jsonify({"success": False, "error": "Failed to send update command"}), 500
@@ -1229,15 +1324,22 @@ def api_update_companion():
 @app.route('/api/satellite/update', methods=['POST'])
 @login_required
 def api_update_satellite():
-    """Update Satellite to stable version only - triggers via omnicon.py for OLED feedback"""
+    """Update Satellite - supports stable, beta, or specific version"""
     try:
-        # Send command to omnicon.py so OLED shows update progress
-        success = send_command_to_omnicon('update_satellite_stable', {})
+        data = request.get_json() or {}
+        update_type = data.get('type', 'stable')
+        version = data.get('version', '')
+
+        if update_type in ('stable', 'beta'):
+            success = send_command_to_omnicon(f'update_satellite_{update_type}', {})
+        else:
+            # Specific version
+            success = send_command_to_omnicon('update_satellite_version', {'version': version})
 
         if success:
             return jsonify({
                 "success": True,
-                "message": "Starting Satellite stable update. Check OLED for progress. System will reboot when complete."
+                "message": f"Starting Satellite {update_type} update. Check OLED for progress. System will reboot when complete."
             })
         else:
             return jsonify({"success": False, "error": "Failed to send update command"}), 500
