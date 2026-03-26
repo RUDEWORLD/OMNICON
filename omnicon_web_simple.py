@@ -1571,7 +1571,28 @@ def api_wifi_connect():
             except Exception as e:
                 logging.warning(f"Could not set WiFi priority: {e}")
 
-            return jsonify({"success": True, "message": f"Connected to {ssid}"})
+            # Check for captive portal
+            captive_portal = False
+            portal_url = None
+            try:
+                import urllib.request
+                req = urllib.request.Request("http://connectivitycheck.gstatic.com/generate_204")
+                resp = urllib.request.urlopen(req, timeout=5)
+                if resp.status != 204:
+                    captive_portal = True
+                    portal_url = resp.url
+            except Exception as e:
+                # If redirected, urllib may throw or return the portal page
+                captive_portal = True
+                portal_url = getattr(e, 'url', None) or "http://connectivitycheck.gstatic.com/generate_204"
+
+            response_data = {"success": True, "message": f"Connected to {ssid}"}
+            if captive_portal:
+                response_data["captive_portal"] = True
+                response_data["portal_url"] = portal_url
+                logging.info(f"Captive portal detected on {ssid}: {portal_url}")
+
+            return jsonify(response_data)
         else:
             error_msg = result.stderr or result.stdout or "Connection failed"
             logging.error(f"WiFi connection failed: {error_msg}")
@@ -1657,6 +1678,119 @@ def api_wifi_enable():
     except Exception as e:
         logging.error(f"Error enabling WiFi: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+# Captive Portal Detection and Proxy
+@app.route('/api/wifi/check-portal', methods=['GET'])
+@login_required
+def api_wifi_check_portal():
+    """Check if the current WiFi connection has a captive portal"""
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://connectivitycheck.gstatic.com/generate_204")
+        resp = urllib.request.urlopen(req, timeout=5)
+        if resp.status == 204:
+            return jsonify({"captive_portal": False, "internet": True})
+        else:
+            return jsonify({"captive_portal": True, "portal_url": resp.url, "internet": False})
+    except Exception as e:
+        url = getattr(e, 'url', None)
+        return jsonify({"captive_portal": True, "portal_url": url, "internet": False})
+
+@app.route('/portal')
+@login_required
+def portal_page():
+    """Serve the captive portal browser page"""
+    return render_template('portal.html')
+
+@app.route('/api/portal/proxy', methods=['GET', 'POST'])
+@login_required
+def api_portal_proxy():
+    """Proxy requests through the Pi to interact with captive portals"""
+    target_url = request.args.get('url')
+    if not target_url:
+        return jsonify({"error": "No URL specified"}), 400
+
+    try:
+        # Forward the request through the Pi
+        if request.method == 'POST':
+            # Forward form data
+            resp = requests.post(
+                target_url,
+                data=request.form.to_dict() if request.form else request.get_data(),
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Content-Type': request.content_type or 'application/x-www-form-urlencoded',
+                },
+                allow_redirects=True,
+                timeout=15,
+                verify=False
+            )
+        else:
+            resp = requests.get(
+                target_url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                },
+                allow_redirects=True,
+                timeout=15,
+                verify=False
+            )
+
+        content = resp.text
+        content_type = resp.headers.get('Content-Type', 'text/html')
+
+        # For HTML responses, rewrite URLs to go through our proxy
+        if 'text/html' in content_type:
+            from urllib.parse import urljoin, quote
+            import re
+
+            base_url = resp.url
+
+            # Rewrite form actions to go through proxy
+            def rewrite_action(match):
+                action = match.group(1)
+                if action.startswith('http'):
+                    full_url = action
+                elif action.startswith('/'):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(base_url)
+                    full_url = f"{parsed.scheme}://{parsed.netloc}{action}"
+                else:
+                    full_url = urljoin(base_url, action)
+                return f'action="/api/portal/proxy?url={quote(full_url, safe="")}"'
+
+            content = re.sub(r'action=["\']([^"\']*)["\']', rewrite_action, content, flags=re.IGNORECASE)
+
+            # Rewrite href and src for CSS/JS/images
+            def rewrite_url(match):
+                tag = match.group(1)
+                url = match.group(2)
+                if url.startswith('data:') or url.startswith('#') or url.startswith('javascript:'):
+                    return match.group(0)
+                if url.startswith('http'):
+                    full_url = url
+                elif url.startswith('//'):
+                    full_url = 'http:' + url
+                elif url.startswith('/'):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(base_url)
+                    full_url = f"{parsed.scheme}://{parsed.netloc}{url}"
+                else:
+                    full_url = urljoin(base_url, url)
+                return f'{tag}="/api/portal/proxy?url={quote(full_url, safe="")}"'
+
+            content = re.sub(r'((?:href|src))=["\']([^"\']*)["\']', rewrite_url, content, flags=re.IGNORECASE)
+
+        from flask import Response
+        return Response(content, content_type=content_type)
+
+    except Exception as e:
+        logging.error(f"Portal proxy error: {e}")
+        return f"<html><body><h3>Error loading portal page</h3><p>{str(e)}</p><p><a href='/portal'>Try again</a></p></body></html>", 500
 
 # Terminal API routes
 @app.route('/api/terminal/start', methods=['POST'])

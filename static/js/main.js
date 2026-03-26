@@ -1378,8 +1378,17 @@ function connectToWifi() {
         }),
         timeout: 45000,
         success: function(data) {
-            showToast('Success', data.message || 'Connected to ' + ssid, 'success');
-            bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
+            if (data.captive_portal) {
+                // Captive portal detected - show portal login option
+                showToast('Warning', 'Connected to ' + ssid + ' but a login page is required', 'warning');
+                bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
+                if (confirm('This network requires a login page (captive portal). Open the portal login now?')) {
+                    window.location.href = '/portal';
+                }
+            } else {
+                showToast('Success', data.message || 'Connected to ' + ssid, 'success');
+                bootstrap.Modal.getInstance(document.getElementById('wifiConnectModal')).hide();
+            }
 
             // Refresh WiFi status
             setTimeout(loadWifiStatus, 2000);
