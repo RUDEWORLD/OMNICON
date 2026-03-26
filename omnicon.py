@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.065
+# V4.2.066
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1780,14 +1780,27 @@ def download_and_extract_zip_from_github(tag, extract_to):
         shutil.rmtree(temp_extract)
 
     try:
-        # Download the ZIP file
+        # Show downloading message
+        show_message(f"DOWNLOADING\n{tag}...", 0.5)
+
+        # Download the ZIP file with progress
         r = requests.get(zip_url, stream=True)
         r.raise_for_status()
+
+        total_size = int(r.headers.get('content-length', 0))
+        downloaded = 0
 
         with open(local_zip, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        progress = int((downloaded / total_size) * 100)
+                        update_oled_with_progress(progress)
+
+        # Show extracting message
+        show_message("EXTRACTING\nFILES...", 0.5)
 
         # Extract ZIP
         with zipfile.ZipFile(local_zip, "r") as zip_ref:
@@ -1973,15 +1986,21 @@ def update_omnicon():
 
 
 def perform_update(version):
+    global updating_application
     extract_path = "/home/omnicon/OLED_Stats"
 
+    updating_application = True
+    show_message(f"UPDATING\nOMNICON\n{version}", 2)
+
     ok, err = download_and_extract_zip_from_github(version, extract_path)
+    updating_application = False
+
     if ok:
-        # Show message before restarting
-        show_message("RESTARTING\nSERVICES...", 2)
+        show_message("UPDATE COMPLETE\nRESTARTING...", 2)
         restart_script()
         return "OMNICON UPDATED"
     else:
+        show_message(f"UPDATE FAILED", 3)
         return f"UPDATE FAILED\n{err}"
 
 def downgrade_omnicon():
@@ -2010,15 +2029,21 @@ def downgrade_omnicon():
     return "DOWNGRADE AVAILABLE"
 
 def perform_downgrade(version):
+    global updating_application
     extract_path = "/home/omnicon/OLED_Stats"
 
+    updating_application = True
+    show_message(f"DOWNGRADING\nOMNICON\n{version}", 2)
+
     ok, err = download_and_extract_zip_from_github(version, extract_path)
+    updating_application = False
+
     if ok:
-        # Show message before restarting
-        show_message("RESTARTING\nSERVICES...", 2)
+        show_message("DOWNGRADE COMPLETE\nRESTARTING...", 2)
         restart_script()
         return "OMNICON DOWNGRADED"
     else:
+        show_message("DOWNGRADE FAILED", 3)
         return f"DOWNGRADE FAILED\n{err}"
 
 # Update OLED display in a separate thread

@@ -534,6 +534,24 @@ function selectOmniconVersion(version) {
 }
 
 // Perform Omnicon update
+// Auto-reload page after an update by polling until the server is back
+function waitForRestartAndReload(delayMs) {
+    delayMs = delayMs || 5000;
+    setTimeout(function poll() {
+        $.ajax({
+            url: '/api/versions',
+            method: 'GET',
+            timeout: 3000,
+            success: function() {
+                location.reload();
+            },
+            error: function() {
+                setTimeout(poll, 2000);
+            }
+        });
+    }, delayMs);
+}
+
 function performOmniconUpdate() {
     const version = window.selectedOmniconVersion;
     if (!version) {
@@ -554,16 +572,9 @@ function performOmniconUpdate() {
         contentType: 'application/json',
         data: JSON.stringify({version: version}),
         success: function(data) {
-            showToast('Success', `Updating to ${version}. The system will restart.`, 'success');
+            showToast('Success', `Updating to ${version}. Page will reload when complete.`, 'success');
             bootstrap.Modal.getInstance(document.getElementById('omniconUpdateModal')).hide();
-
-            // Show a permanent notification that the system is restarting
-            setTimeout(function() {
-                alert('Omnicon is updating and will restart. The page will reload in 10 seconds.');
-                setTimeout(function() {
-                    location.reload();
-                }, 10000);
-            }, 1000);
+            waitForRestartAndReload(8000);
         },
         error: function(xhr) {
             const response = xhr.responseJSON;
@@ -1126,7 +1137,8 @@ function triggerAppUpdate(app, type, version) {
         contentType: 'application/json',
         data: JSON.stringify(postData),
         success: function(data) {
-            showToast('Success', data.message, 'success');
+            showToast('Success', data.message + ' Page will reload when complete.', 'success');
+            waitForRestartAndReload(15000);
         },
         error: function(xhr) {
             $('#' + app + 'UpdateProgress').hide();
