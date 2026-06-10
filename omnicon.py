@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.069
+# V4.2.070
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -29,7 +29,9 @@ import zipfile
 import shutil
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
+# INFO level: DEBUG floods the journal with ~3 lines/sec of OLED refresh noise,
+# which is constant SD card write load (a freeze suspect) and buries real errors.
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 # ============================================================================
 # FULLSCREEN KIOSK GUI
@@ -276,37 +278,18 @@ def start_kiosk():
 
 # Helper function to get system time with fresh timezone
 def get_system_time():
-    """Get the current system time, forcing a fresh read of timezone info"""
+    """Get the current system time, forcing a fresh read of timezone info.
+    tzset() with TZ unset makes datetime.now() read /etc/localtime fresh, so
+    timezone changes show up immediately - same answer the old `date`
+    subprocess gave, without forking a process every second."""
     try:
-        # Force timezone reload by resetting the environment
         if 'TZ' in os.environ:
             del os.environ['TZ']
         time.tzset()
-
-        # Use subprocess to get the actual system time
-        result = subprocess.run(['date', '+%Y-%m-%d %H:%M:%S %z'],
-                              capture_output=True, text=True, check=True)
-        date_str = result.stdout.strip()
-
-        # Parse the date string and create a datetime object
-        # Format: YYYY-MM-DD HH:MM:SS +ZZZZ
-        parts = date_str.split()
-        date_part = parts[0]
-        time_part = parts[1]
-
-        # Create a datetime from the parsed values
-        year, month, day = map(int, date_part.split('-'))
-        hour, minute, second = map(int, time_part.split(':'))
-
-        # Return a datetime-like object with strftime method
-        from datetime import datetime as dt
-        return dt(year, month, day, hour, minute, second)
     except Exception as e:
-        logging.warning(f"Failed to get system time via subprocess: {e}")
-        # Fallback to regular datetime but try to reload timezone
-        time.tzset()
-        from datetime import datetime as dt
-        return dt.now()
+        logging.warning(f"Failed to reload timezone: {e}")
+    from datetime import datetime as dt
+    return dt.now()
 
 # GPIO setup
 BUTTON_K1 = 26  # Using GPIO pin 26
@@ -612,6 +595,7 @@ def toggle_service(service=None):
             execute_command(command_stop_companion)
         execute_command(command_start_satellite)
     save_state(state)
+    invalidate_stats_cache()  # OLED title reflects the new service immediately
 
 def toggle_network(network=None):
     state = load_state()
@@ -626,6 +610,7 @@ def toggle_network(network=None):
         switch_network_profile(STATIC_PROFILE)
         state["network"] = "STATIC"
     save_state(state)
+    invalidate_stats_cache()  # OLED profile name reflects the change immediately
 
 # Define the Reset Pin
 oled_reset = digitalio.DigitalInOut(board.D4)
@@ -929,6 +914,80 @@ def clear_display():
     draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
 
 # Function to update OLED display
+# ============================================================================
+# FAST STATS - subprocess-free system stats for the OLED render path.
+# The default screen redraws every second; it used to fork ~8 shell pipelines
+# per redraw (top/free/df/hostname/vcgencmd/nmcli/systemctl) with no timeouts,
+# all while holding oled_lock - so one hung nmcli could freeze the OLED and
+# buttons forever. These read /proc and /sys directly; the two genuinely
+# external facts (NetworkManager profile, service state) are cached briefly
+# and refreshed with strict timeouts, keeping the last known value on failure.
+# ============================================================================
+_stats_cache = {'eth_profile': ('', 0.0), 'service': (None, 0.0)}
+
+
+def get_display_ip():
+    """First IPv4 address, preferring wired - same answer as `hostname -I | cut -d' ' -f1`."""
+    try:
+        if_addrs = psutil.net_if_addrs()
+        ordered = ['eth0', 'wlan0'] + [i for i in if_addrs if i not in ('eth0', 'wlan0', 'lo')]
+        for iface in ordered:
+            for a in if_addrs.get(iface, []):
+                if a.family == socket.AF_INET and not a.address.startswith('169.254'):
+                    return a.address
+    except Exception:
+        pass
+    return ""
+
+
+def get_eth_profile(max_age=10):
+    """Active NetworkManager profile name on the wired interface, cached."""
+    val, ts = _stats_cache['eth_profile']
+    if time.monotonic() - ts < max_age:
+        return val
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+                             capture_output=True, text=True, timeout=3).stdout
+        val = next((line.split(':')[0] for line in out.splitlines() if 'eth' in line), '')
+    except Exception:
+        pass  # keep last known value rather than blanking the display
+    _stats_cache['eth_profile'] = (val, time.monotonic())
+    return val
+
+
+def get_active_app_service(max_age=5):
+    """Which app service is running: 'companion', 'satellite' or None. Cached."""
+    val, ts = _stats_cache['service']
+    if time.monotonic() - ts < max_age:
+        return val
+    try:
+        if subprocess.run(["systemctl", "is-active", "--quiet", "companion.service"], timeout=3).returncode == 0:
+            val = 'companion'
+        elif subprocess.run(["systemctl", "is-active", "--quiet", "satellite.service"], timeout=3).returncode == 0:
+            val = 'satellite'
+        else:
+            val = None
+    except Exception:
+        pass  # keep last known value
+    _stats_cache['service'] = (val, time.monotonic())
+    return val
+
+
+def invalidate_stats_cache():
+    """Force fresh reads on the next render (call after toggling service/network)."""
+    _stats_cache['eth_profile'] = (_stats_cache['eth_profile'][0], 0.0)
+    _stats_cache['service'] = (_stats_cache['service'][0], 0.0)
+
+
+def get_cpu_temp_str():
+    """SoC temperature formatted like vcgencmd ("49.4'C"), read from /sys."""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp') as f:
+            return f"{int(f.read().strip()) / 1000.0:.1f}'C"
+    except Exception:
+        return "N/A"
+
+
 def update_oled_display(force=False):
     global blink_state, gateway, update_flag, last_update_time, datetime_temp, time_format_24hr, message_displayed, selected_version
     global companion_version, satellite_version  # Declare as global to modify them
@@ -954,30 +1013,19 @@ def update_oled_display(force=False):
         if menu_state == "default":
             current_time_format = "%H:%M:%S" if time_format_24hr else "%I:%M:%S %p"
             current_time_str = get_system_time().strftime(current_time_format)
-            # Shell scripts for system monitoring
-            cmd = "hostname -I | cut -d\' \' -f1"
-            IP = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-            cmd = "top -bn1 | grep load | awk '{printf \"CPU: %.2f\", $(NF-2)}'"
-            CPU = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-            cmd = "free -m | awk 'NR==2{printf \"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
-            MemUsage = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-            cmd = "df -h | awk '$NF==\"/\"{printf \"Disk: %d/%dGB %s\", $3,$2,$5}'"
-            Disk = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-            cmd = "vcgencmd measure_temp |cut -f 2 -d '='"
-            Temp = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            # System stats via FAST STATS (see above) - no subprocesses in the
+            # per-second render path. Note: the old top/free/df pipelines were
+            # computing CPU/Mem/Disk strings that were never drawn on this
+            # screen, so they are simply gone.
+            IP = get_display_ip()
+            Temp = get_cpu_temp_str()
+            EthProfile = get_eth_profile()
 
-            # Get the active ethernet connection profile name
-            cmd = "nmcli -t -f NAME,DEVICE connection show --active | grep eth | cut -d':' -f1"
-            EthProfile = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
-
-            # Check the status of the services
-            companion_active = subprocess.run(["systemctl", "is-active", "--quiet", "companion.service"]).returncode == 0
-            satellite_active = subprocess.run(["systemctl", "is-active", "--quiet", "satellite.service"]).returncode == 0
-
-            if companion_active:
+            active_service = get_active_app_service()
+            if active_service == 'companion':
                 title = "COMPANION"
                 port = ":8000"
-            elif satellite_active:
+            elif active_service == 'satellite':
                 title = "SATELLITE"
                 port = ":9999"
             else:
@@ -3072,6 +3120,142 @@ def process_web_commands():
         time.sleep(0.5)
 
 
+# ============================================================================
+# FLIGHT RECORDER - persistent system-health log for diagnosing freezes.
+# Samples vitals every 30s to a small rotating file that survives a hard
+# crash/reboot. After a freeze, the tail of this file shows what the system
+# looked like in its final moments (memory climbing, swap thrash, D-state
+# pileup, temperature, throttling, etc).
+# ============================================================================
+DIAG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'diagnostics')
+FLIGHT_RECORDER_FILE = os.path.join(DIAG_DIR, 'flight_recorder.jsonl')
+FLIGHT_RECORDER_INTERVAL = 30           # seconds between samples
+FLIGHT_RECORDER_MAX_BYTES = 512 * 1024  # rotate at 512KB, keep one old file
+
+
+def _flight_throttled():
+    """Read undervoltage/throttle flags (0x0 = healthy)."""
+    try:
+        out = subprocess.run(['vcgencmd', 'get_throttled'],
+                             capture_output=True, text=True, timeout=5).stdout
+        return out.strip().split('=')[1] if '=' in out else None
+    except Exception:
+        return None
+
+
+def _flight_cpu_temp():
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp') as f:
+            return round(int(f.read().strip()) / 1000.0, 1)
+    except Exception:
+        return None
+
+
+def take_flight_sample():
+    """Collect one vitals sample. Reads /proc directly via psutil - no shell-outs
+    except a single vcgencmd for throttle flags."""
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk = psutil.disk_usage('/')
+
+    # One pass over all processes: top consumers by RSS + D-state count.
+    # D-state (uninterruptible I/O sleep) processes piling up is the classic
+    # signature of a dying/stalling SD card.
+    top, d_state, total_procs = [], 0, 0
+    for p in psutil.process_iter(['pid', 'name', 'memory_info', 'status']):
+        try:
+            total_procs += 1
+            if p.info['status'] == psutil.STATUS_DISK_SLEEP:
+                d_state += 1
+            rss = p.info['memory_info'].rss if p.info['memory_info'] else 0
+            top.append((rss, p.info['pid'], p.info['name']))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    top.sort(reverse=True)
+
+    me = psutil.Process()
+    sample = {
+        'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'uptime_s': int(time.time() - psutil.boot_time()),
+        'load': [round(x, 2) for x in os.getloadavg()],
+        'cpu_pct': psutil.cpu_percent(interval=None),
+        'mem_avail_mb': mem.available // (1024 * 1024),
+        'mem_pct': mem.percent,
+        'swap_used_mb': swap.used // (1024 * 1024),
+        'swap_pct': swap.percent,
+        'disk_free_mb': disk.free // (1024 * 1024),
+        'temp_c': _flight_cpu_temp(),
+        'throttled': _flight_throttled(),
+        'procs': total_procs,
+        'd_state': d_state,
+        'self_threads': me.num_threads(),
+        'self_fds': me.num_fds(),
+        'top_rss': [{'mb': r // (1024 * 1024), 'pid': pid, 'n': name}
+                    for r, pid, name in top[:6]],
+    }
+    return sample
+
+
+def flight_recorder_loop():
+    """Daemon thread: append one JSON line per sample, fsync so it survives a
+    hard freeze, rotate to keep size bounded. Must never crash omnicon."""
+    last_error_log = 0
+    os.makedirs(DIAG_DIR, exist_ok=True)
+    logging.info(f"Flight recorder started ({FLIGHT_RECORDER_INTERVAL}s interval -> {FLIGHT_RECORDER_FILE})")
+    while True:
+        try:
+            sample = take_flight_sample()
+            line = json.dumps(sample, separators=(',', ':')) + '\n'
+            with open(FLIGHT_RECORDER_FILE, 'a') as f:
+                f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+            if os.path.getsize(FLIGHT_RECORDER_FILE) > FLIGHT_RECORDER_MAX_BYTES:
+                os.replace(FLIGHT_RECORDER_FILE, FLIGHT_RECORDER_FILE + '.1')
+        except Exception as e:
+            # Log at most once per 10 minutes so a persistent failure
+            # (e.g. disk full) can't flood the journal
+            if time.monotonic() - last_error_log > 600:
+                last_error_log = time.monotonic()
+                logging.error(f"Flight recorder error: {e}")
+        time.sleep(FLIGHT_RECORDER_INTERVAL)
+
+
+def ensure_journald_config():
+    """Make the systemd journal persistent (survives reboot) and size-capped
+    (protects the SD card). Without this, the journal from before a freeze is
+    lost on reboot - which is exactly the data we need. Idempotent: only
+    writes and restarts journald when the config actually changes."""
+    conf_path = '/etc/systemd/journald.conf.d/omnicon.conf'
+    desired = (
+        "# Written by Omnicon - persistent boot-surviving logs with bounded size\n"
+        "[Journal]\n"
+        "Storage=persistent\n"
+        "SystemMaxUse=256M\n"
+        "SystemKeepFree=512M\n"
+        "MaxRetentionSec=14day\n"
+    )
+    try:
+        try:
+            with open(conf_path, 'r') as f:
+                if f.read() == desired:
+                    return
+        except FileNotFoundError:
+            pass
+        subprocess.run(['sudo', 'mkdir', '-p', '/etc/systemd/journald.conf.d'],
+                       capture_output=True)
+        result = subprocess.run(['sudo', 'tee', conf_path], input=desired,
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            logging.error(f"Failed to write journald config: {result.stderr}")
+            return
+        subprocess.run(['sudo', 'systemctl', 'restart', 'systemd-journald'],
+                       capture_output=True)
+        logging.info("Journald configured: persistent storage, 256M cap")
+    except Exception as e:
+        logging.error(f"Failed to configure journald: {e}")
+
+
 def main():
     global datetime_temp, time_format_24hr
     initial_setup()
@@ -3098,6 +3282,10 @@ def main():
     web_command_thread = threading.Thread(target=process_web_commands, daemon=True)
     web_command_thread.start()
     logging.info("Web command processor started")
+
+    # Persistent journald + flight recorder for freeze diagnosis
+    ensure_journald_config()
+    threading.Thread(target=flight_recorder_loop, daemon=True).start()
 
     # Start web command processor thread
 

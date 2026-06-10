@@ -702,6 +702,27 @@ function confirmPowerAction(action) {
     modal.show();
 }
 
+// Download diagnostics bundle (logs + system health data for support)
+function downloadDiagnostics(btn) {
+    // Building the bundle takes a few seconds (journal export) - show feedback
+    const $btn = $(btn);
+    const originalHtml = $btn.html();
+    $btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Building bundle...');
+    showToast('Info', 'Collecting logs, this can take ~10 seconds...', 'info');
+
+    // Use a hidden link so the browser handles the download natively
+    const link = document.createElement('a');
+    link.href = '/api/diagnostics/download';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Re-enable after a grace period (download happens in background)
+    setTimeout(function() {
+        $btn.prop('disabled', false).html(originalHtml);
+    }, 12000);
+}
+
 // Perform power action
 function performPowerAction(action) {
     $.ajax({

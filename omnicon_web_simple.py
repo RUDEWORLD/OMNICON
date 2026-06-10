@@ -5,7 +5,7 @@ Omnicon Simple Web GUI - Remote Control for omnicon.py
 This acts as a remote control for the existing omnicon.py script
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
 from flask_cors import CORS
 from functools import wraps
 import json
@@ -29,6 +29,9 @@ CORS(app)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Silence werkzeug's per-request log lines: the kiosk polls ~1 req/sec forever,
+# which floods the journal with constant SD card writes and buries real errors.
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # Version - read from omnicon.py header
 def get_omnicon_version():
@@ -50,6 +53,9 @@ WEB_GUI_VERSION = get_omnicon_version()
 STATE_FILE = "state.json"
 COMMAND_FILE = "web_command.json"  # File to communicate with omnicon.py
 CONFIG_FILE = "web_config.json"
+
+# Cached list of timezones (filled on first /api/datetime request)
+_timezone_list_cache = None
 
 # Default configuration
 DEFAULT_CONFIG = {
@@ -456,7 +462,7 @@ def api_datetime():
                     if tz_from_file:
                         current_tz = tz_from_file
                         tz_detected = True
-                        logging.info(f"Detected timezone from /etc/timezone: {current_tz}")
+                        logging.debug(f"Detected timezone from /etc/timezone: {current_tz}")
             except Exception as e:
                 logging.warning(f"Failed to read /etc/timezone: {e}")
 
@@ -468,7 +474,7 @@ def api_datetime():
                 if "/zoneinfo/" in localtime_path:
                     current_tz = localtime_path.split("/zoneinfo/")[1]
                     tz_detected = True
-                    logging.info(f"Detected timezone from /etc/localtime: {current_tz}")
+                    logging.debug(f"Detected timezone from /etc/localtime: {current_tz}")
             except Exception as e:
                 logging.warning(f"Failed to read timezone from /etc/localtime: {e}")
 
@@ -480,7 +486,7 @@ def api_datetime():
                 if tz_output.strip():
                     current_tz = tz_output.strip()
                     tz_detected = True
-                    logging.info(f"Detected timezone from timedatectl show: {current_tz}")
+                    logging.debug(f"Detected timezone from timedatectl show: {current_tz}")
             except Exception as e:
                 logging.warning(f"Failed to get timezone from timedatectl show: {e}")
 
@@ -493,20 +499,25 @@ def api_datetime():
                             tz_parts = line.split('Time zone:')[1].strip()
                             current_tz = tz_parts.split()[0] if tz_parts else "UTC"
                             tz_detected = True
-                            logging.info(f"Detected timezone from timedatectl status: {current_tz}")
+                            logging.debug(f"Detected timezone from timedatectl status: {current_tz}")
                             break
                 except Exception as e:
                     logging.warning(f"Failed to get timezone from timedatectl status: {e}")
 
-        logging.info(f"Final detected timezone: {current_tz}")
+        logging.debug(f"Final detected timezone: {current_tz}")
 
-        # Get list of available timezones
-        try:
-            tz_list_output = subprocess.check_output(["timedatectl", "list-timezones"], text=True)
-            timezones = [tz.strip() for tz in tz_list_output.split('\n') if tz.strip()]
-        except:
-            timezones = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-                        "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney"]
+        # Get list of available timezones (cached: this endpoint is polled every
+        # second and the list never changes at runtime, so don't fork
+        # timedatectl ~86k times a day for the same answer)
+        global _timezone_list_cache
+        if _timezone_list_cache is None:
+            try:
+                tz_list_output = subprocess.check_output(["timedatectl", "list-timezones"], text=True, timeout=10)
+                _timezone_list_cache = [tz.strip() for tz in tz_list_output.split('\n') if tz.strip()]
+            except:
+                _timezone_list_cache = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                            "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney"]
+        timezones = _timezone_list_cache
 
         response = jsonify({
             "datetime": current_time.isoformat(),
@@ -811,6 +822,82 @@ def api_system_power():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ============================================================================
+# DIAGNOSTICS BUNDLE - one-click download of everything needed to diagnose a
+# freeze: the flight recorder vitals log, the journal from the PREVIOUS boot
+# (the moments before the freeze), kernel messages (OOM killer, I/O errors,
+# hung tasks), and current system snapshots.
+# ============================================================================
+
+def _diag_run(cmd, timeout=25):
+    """Run a shell command for the diagnostics bundle, best-effort.
+    Falls back to passwordless sudo for commands that need elevation."""
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        if (r.returncode != 0 or not r.stdout.strip()):
+            r2 = subprocess.run('sudo -n ' + cmd, shell=True, capture_output=True,
+                                text=True, timeout=timeout)
+            if r2.stdout.strip():
+                return r2.stdout
+        return r.stdout if r.stdout.strip() else f"(no output, rc={r.returncode}, stderr: {r.stderr[:300]})"
+    except Exception as e:
+        return f"(command failed: {e})"
+
+@app.route('/api/diagnostics/download')
+@login_required
+def api_diagnostics_download():
+    """Build and download a zip of logs + system state for support."""
+    import io
+    import zipfile
+    import socket as socket_mod
+
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        fr_file = os.path.join(script_dir, 'diagnostics', 'flight_recorder.jsonl')
+
+        sections = {
+            # The money file: everything logged right before the last reboot
+            'journal_previous_boot.txt': _diag_run('journalctl -b -1 --no-pager -n 8000'),
+            # Kernel ring of previous boot: OOM killer, mmc/SD errors, hung task warnings
+            'kernel_previous_boot.txt': _diag_run('journalctl -k -b -1 --no-pager -n 3000'),
+            'journal_current_boot.txt': _diag_run('journalctl -b --no-pager -n 4000'),
+            'kernel_current_boot.txt': _diag_run('dmesg -T | tail -n 1000'),
+            # Reboot history - shows how often this unit has been power cycled
+            'boot_history.txt': _diag_run('journalctl --list-boots --no-pager | tail -30'),
+            'snapshot.txt': '\n\n'.join([
+                '===== uptime =====',            _diag_run('uptime'),
+                '===== free -m =====',           _diag_run('free -m'),
+                '===== df -h =====',             _diag_run('df -h'),
+                '===== temperature =====',       _diag_run('vcgencmd measure_temp'),
+                '===== throttle flags =====',    _diag_run('vcgencmd get_throttled'),
+                '===== journal disk usage ====', _diag_run('journalctl --disk-usage'),
+                '===== top 25 by memory =====',  _diag_run('ps aux --sort=-rss | head -26'),
+                '===== service status =====',    _diag_run('systemctl --no-pager status omnicon omnicon-web companion satellite | head -80'),
+                '===== os info =====',           _diag_run('cat /etc/os-release /proc/device-tree/model 2>/dev/null; echo; uname -a'),
+            ]),
+        }
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name, content in sections.items():
+                zf.writestr(name, content or '(empty)')
+            # Flight recorder vitals (current + rotated generation)
+            for path, arcname in [(fr_file, 'flight_recorder.jsonl'),
+                                  (fr_file + '.1', 'flight_recorder_older.jsonl')]:
+                try:
+                    zf.write(path, arcname)
+                except OSError:
+                    pass
+        buf.seek(0)
+
+        hostname = socket_mod.gethostname()
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return send_file(buf, mimetype='application/zip', as_attachment=True,
+                         download_name=f'omnicon_diagnostics_{hostname}_{stamp}.zip')
+    except Exception as e:
+        logging.error(f"Error building diagnostics bundle: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # Simulate button presses
 @app.route('/api/button/press', methods=['POST'])
 @login_required
@@ -1037,10 +1124,32 @@ class SimpleTerminalSession:
                 pass
 
 # Omnicon Update API routes
+# Cache for GitHub update checks. The GUI polls this endpoint every 30s from
+# every open page/kiosk; without a cache each poll is a fresh outbound HTTPS
+# request (up to 4 attempts x 15s timeout when offline), which stacks worker
+# threads and hammers GitHub. Successful results are reused for 10 minutes,
+# failures for 2 minutes.
+_update_check_cache = {'data': None, 'ts': 0, 'ok': False}
+_update_check_lock = threading.Lock()
+UPDATE_CACHE_OK_SECS = 600
+UPDATE_CACHE_FAIL_SECS = 120
+
 @app.route('/api/omnicon/check_update')
 @login_required
 def api_check_omnicon_update():
-    """Check for Omnicon updates from GitHub"""
+    """Check for Omnicon updates from GitHub (cached)"""
+    import time as time_mod
+    with _update_check_lock:
+        age = time_mod.monotonic() - _update_check_cache['ts']
+        ttl = UPDATE_CACHE_OK_SECS if _update_check_cache['ok'] else UPDATE_CACHE_FAIL_SECS
+        if _update_check_cache['data'] is not None and age < ttl:
+            return jsonify(_update_check_cache['data'])
+        result, ok = _check_omnicon_update_uncached()
+        _update_check_cache.update(data=result, ts=time_mod.monotonic(), ok=ok)
+        return jsonify(result)
+
+def _check_omnicon_update_uncached():
+    """Do the actual GitHub tags fetch. Returns (result_dict, success_bool)."""
     try:
         # Get current version from omnicon.py
         current_version = None
@@ -1065,7 +1174,7 @@ def api_check_omnicon_update():
                     config = json.load(f)
                     github_token = config.get('github_token', '').strip()
                     if github_token:
-                        logging.info("GitHub token loaded for API request")
+                        logging.debug("GitHub token loaded for API request")
         except Exception as e:
             logging.warning(f"Could not load GitHub token: {e}")
 
@@ -1090,13 +1199,13 @@ def api_check_omnicon_update():
 
         for headers in headers_options:
             try:
-                logging.info(f"Attempting GitHub API with headers: {list(headers.keys())}")
+                logging.debug(f"Attempting GitHub API with headers: {list(headers.keys())}")
                 response = requests.get("https://api.github.com/repos/RUDEWORLD/OMNICON/tags",
                                        headers=headers, timeout=15)
                 response.raise_for_status()
                 tags = response.json()
                 available_versions = [tag['name'] for tag in tags]
-                logging.info(f"Successfully fetched {len(tags)} tags")
+                logging.debug(f"Successfully fetched {len(tags)} tags")
                 break
             except Exception as e:
                 logging.error(f"Failed attempt: {e}")
@@ -1119,16 +1228,16 @@ def api_check_omnicon_update():
             except:
                 pass
 
-        return jsonify({
+        return {
             'current_version': current_version,
             'latest_version': latest_version,
             'available_versions': available_versions,
             'update_available': update_available
-        })
+        }, latest_version != "Check Failed"
 
     except Exception as e:
         logging.error(f"Error checking for updates: {e}")
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}, False
 
 @app.route('/api/omnicon/update', methods=['POST'])
 @login_required
@@ -2140,9 +2249,12 @@ if __name__ == '__main__':
     fallback_port = config.get('port', 8080)
 
     # Test if we can bind to port 80 before trying
+    # threaded=True: without it Flask handles ONE request at a time, so a single
+    # slow/hung handler (wifi scan, portal check, GitHub call) freezes the whole
+    # web GUI for everyone until restart.
     if can_bind_to_port(primary_port):
         print(f"Starting on port {primary_port}...")
-        app.run(host='0.0.0.0', port=primary_port, debug=False)
+        app.run(host='0.0.0.0', port=primary_port, debug=False, threaded=True)
     else:
         print(f"Port {primary_port} unavailable (requires root or in use), using port {fallback_port}")
-        app.run(host='0.0.0.0', port=fallback_port, debug=False)
+        app.run(host='0.0.0.0', port=fallback_port, debug=False, threaded=True)
