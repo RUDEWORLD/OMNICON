@@ -875,15 +875,29 @@ def api_diagnostics_download():
                 '===== service status =====',    _diag_run('systemctl --no-pager status omnicon omnicon-web companion satellite | head -80'),
                 '===== os info =====',           _diag_run('cat /etc/os-release /proc/device-tree/model 2>/dev/null; echo; uname -a'),
             ]),
+            # Auto-upgrade state: confirms whether unattended OS upgrades (the
+            # morning-freeze cause) are disabled, and what packages are pending.
+            'apt_auto_upgrade.txt': '\n\n'.join([
+                '===== apt daily timers =====',     _diag_run('systemctl list-timers apt-daily.timer apt-daily-upgrade.timer --all --no-pager'),
+                '===== timer enabled state =====',  _diag_run('systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer'),
+                '===== 20auto-upgrades config =====', _diag_run('cat /etc/apt/apt.conf.d/20auto-upgrades'),
+                '===== upgradable packages =====',  _diag_run('apt list --upgradable 2>/dev/null'),
+            ]),
         }
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for name, content in sections.items():
                 zf.writestr(name, content or '(empty)')
-            # Flight recorder vitals (current + rotated generation)
-            for path, arcname in [(fr_file, 'flight_recorder.jsonl'),
-                                  (fr_file + '.1', 'flight_recorder_older.jsonl')]:
+            # Flight recorder vitals + unattended-upgrades logs (the dpkg log
+            # names the exact package an auto-upgrade choked on). omnicon is in
+            # group adm, so these are readable without sudo.
+            for path, arcname in [
+                (fr_file, 'flight_recorder.jsonl'),
+                (fr_file + '.1', 'flight_recorder_older.jsonl'),
+                ('/var/log/unattended-upgrades/unattended-upgrades.log', 'unattended-upgrades.log'),
+                ('/var/log/unattended-upgrades/unattended-upgrades-dpkg.log', 'unattended-upgrades-dpkg.log'),
+            ]:
                 try:
                     zf.write(path, arcname)
                 except OSError:

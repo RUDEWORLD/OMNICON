@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.070
+# V4.2.071
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -3256,6 +3256,70 @@ def ensure_journald_config():
         logging.error(f"Failed to configure journald: {e}")
 
 
+def disable_os_auto_upgrades():
+    """Disable Debian's automatic/unattended OS package upgrades.
+
+    The systemd apt-daily timers run unattended-upgrades in the early morning.
+    On a memory-constrained appliance an upgrade run was observed ballooning to
+    ~2.5GB RAM, exhausting the Pi and freezing the ENTIRE system (OLED, web GUI,
+    Companion) in a swap death-spiral until a manual power cycle - the reported
+    "freezes every morning" bug.
+
+    An appliance should update on a controlled schedule (OMNICON's own OTA
+    updater plus companion-update / satellite-update), not via blind unattended
+    OS upgrades. This masks the timers and tells apt's periodic machinery to do
+    nothing. It does NOT remove apt: manual `apt upgrade` and every
+    OMNICON/Companion/Satellite update path keep working. Idempotent and safe to
+    run on every boot - it only acts when something isn't already disabled, so
+    it also self-heals any field unit on the next OMNICON update.
+    """
+    timers = ['apt-daily.timer', 'apt-daily-upgrade.timer']
+    try:
+        # Mask (and stop) any timer that isn't already masked.
+        to_mask = []
+        for t in timers:
+            try:
+                state = subprocess.run(['systemctl', 'is-enabled', t],
+                                       capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:
+                state = ''
+            if state != 'masked':
+                to_mask.append(t)
+        if to_mask:
+            # Stop BEFORE masking (masking first makes the stop fail and leaves
+            # the unit in a cosmetic "failed" state), then mask so nothing can
+            # re-enable it. reset-failed clears any prior residue.
+            subprocess.run(['sudo', 'systemctl', 'stop'] + to_mask, capture_output=True, timeout=20)
+            subprocess.run(['sudo', 'systemctl', 'mask'] + to_mask, capture_output=True, timeout=20)
+            subprocess.run(['sudo', 'systemctl', 'reset-failed'] + to_mask, capture_output=True, timeout=10)
+            logging.info(f"Disabled OS auto-upgrade timers: {', '.join(to_mask)}")
+
+        # Belt-and-suspenders: even a manually-triggered periodic run installs
+        # nothing with these all set to "0".
+        conf_path = '/etc/apt/apt.conf.d/20auto-upgrades'
+        desired = (
+            '// Written by Omnicon - automatic OS upgrades disabled on appliance\n'
+            'APT::Periodic::Update-Package-Lists "0";\n'
+            'APT::Periodic::Unattended-Upgrade "0";\n'
+            'APT::Periodic::Download-Upgradeable-Packages "0";\n'
+            'APT::Periodic::AutocleanInterval "0";\n'
+        )
+        try:
+            with open(conf_path, 'r') as f:
+                current = f.read()
+        except FileNotFoundError:
+            current = None
+        if current != desired:
+            result = subprocess.run(['sudo', 'tee', conf_path], input=desired,
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                logging.info("Disabled apt periodic auto-upgrade config")
+            else:
+                logging.error(f"Failed to write {conf_path}: {result.stderr}")
+    except Exception as e:
+        logging.error(f"Failed to disable OS auto-upgrades: {e}")
+
+
 def main():
     global datetime_temp, time_format_24hr
     initial_setup()
@@ -3286,6 +3350,9 @@ def main():
     # Persistent journald + flight recorder for freeze diagnosis
     ensure_journald_config()
     threading.Thread(target=flight_recorder_loop, daemon=True).start()
+
+    # Stop Debian's unattended OS upgrades - the cause of the morning freezes
+    disable_os_auto_upgrades()
 
     # Start web command processor thread
 
