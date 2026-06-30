@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.071
+# V4.2.072
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -591,6 +591,11 @@ def toggle_service(service=None):
         execute_command(command_start_companion)
     else:
         logging.info('Toggling to Satellite service.')
+        # Pre-switch guard: never start Satellite without its runtime. If a
+        # Companion update deleted /opt/fnm, rebuild it first (shows the OLED
+        # self-heal splash) so the switch can't land on a 203/EXEC "SYSTEM OFF".
+        if not fnm_healthy():
+            ensure_fnm(reason="switch-to-satellite")
         if is_service_active("companion.service"):
             execute_command(command_stop_companion)
         execute_command(command_start_satellite)
@@ -846,17 +851,45 @@ def get_wifi_network_info():
 
 # FUNCTION TO UPDATE COMMAND WITH PROGRESS
 def execute_command_with_progress(command):
+    """Run a command and show its % progress on the OLED.
+
+    The command's output is drained by a BACKGROUND thread so the subprocess is
+    never throttled by OLED paint speed. The old version read a line then painted
+    the slow I2C OLED before reading the next line, so it drained the pipe only as
+    fast as it could draw - pipe backpressure throttled e.g. a 3-second, 300MB
+    download into 5-10 minutes. Here the drain thread reads at full speed while
+    the OLED is repainted at most ~5x/sec and only when the whole-number % changes.
+    """
     try:
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in iter(process.stdout.readline, ''):
-            if line == '':
-                break
-            logging.debug(f"Command output: {line.strip()}")
-            # Parse the line for progress percentage
-            progress = parse_progress(line)
-            if progress is not None:
-                # Update OLED display with progress
-                update_oled_with_progress(progress)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        latest = {'pct': None, 'done': False}
+
+        def drain():
+            try:
+                for line in iter(process.stdout.readline, ''):
+                    if line == '':
+                        break
+                    p = parse_progress(line)
+                    if p is not None:
+                        latest['pct'] = p
+            finally:
+                latest['done'] = True
+
+        threading.Thread(target=drain, daemon=True).start()
+
+        last_drawn = None
+        while not latest['done']:
+            p = latest['pct']
+            if p is not None and p != last_drawn:
+                update_oled_with_progress(p)
+                last_drawn = p
+            time.sleep(0.2)
+        # Final paint so we land on the last value (e.g. 100%)
+        p = latest['pct']
+        if p is not None and p != last_drawn:
+            update_oled_with_progress(p)
+
         process.stdout.close()
         process.wait()
     except Exception as e:
@@ -1561,9 +1594,8 @@ def button_k4_pressed():
                 updating_application = True
                 execute_command_with_progress(update_cmd)
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2132,42 +2164,6 @@ trigger_file = "trigger_command"
 web_command_queue = []
 web_command_lock = threading.Lock()
 
-def process_web_commands():
-    """Process commands from the web GUI - Non-blocking version"""
-    global web_command_queue
-
-    while True:
-        try:
-            # Check if there's a trigger file
-            if os.path.exists(trigger_file):
-                try:
-                    os.remove(trigger_file)  # Remove trigger
-                except:
-                    pass
-
-                # Check for command file
-                if os.path.exists(web_command_file):
-                    try:
-                        with open(web_command_file, 'r') as f:
-                            cmd_data = json.load(f)
-
-                        # Add command to queue instead of processing immediately
-                        with web_command_lock:
-                            web_command_queue.append(cmd_data)
-
-                        logging.info(f"Queued web command: {cmd_data.get('command')}")
-
-                        # Remove command file after reading
-                        os.remove(web_command_file)
-                    except Exception as e:
-                        logging.error(f"Error reading web command: {e}")
-
-        except Exception as e:
-            logging.error(f"Error in web command processor: {e}")
-
-        # Check more frequently but don't block
-        time.sleep(0.2)
-
 def execute_web_commands():
     """Execute queued web commands without blocking the OLED"""
     global menu_state, menu_selection, ip_address, subnet_mask, gateway
@@ -2303,9 +2299,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2318,9 +2313,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2332,9 +2326,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update beta')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2346,9 +2339,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update beta')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2361,9 +2353,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress(f'sudo companion-update stable {version}')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2376,9 +2367,8 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress(f'sudo satellite-update stable {version}')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2387,524 +2377,9 @@ def execute_web_commands():
         logging.error(f"Error executing web command: {e}")
 
 
-def process_web_commands():
-    """Process commands from the web GUI - Non-blocking version"""
-    global web_command_queue
-
-    while True:
-        try:
-            # Check if there's a trigger file
-            if os.path.exists(trigger_file):
-                try:
-                    os.remove(trigger_file)  # Remove trigger
-                except:
-                    pass
-
-                # Check for command file
-                if os.path.exists(web_command_file):
-                    try:
-                        with open(web_command_file, 'r') as f:
-                            cmd_data = json.load(f)
-
-                        # Add command to queue instead of processing immediately
-                        with web_command_lock:
-                            web_command_queue.append(cmd_data)
-
-                        logging.info(f"Queued web command: {cmd_data.get('command')}")
-
-                        # Remove command file after reading
-                        os.remove(web_command_file)
-                    except Exception as e:
-                        logging.error(f"Error reading web command: {e}")
-
-        except Exception as e:
-            logging.error(f"Error in web command processor: {e}")
-
-        # Check more frequently but don't block
-        time.sleep(0.2)
-
-def execute_web_commands():
-    """Execute queued web commands without blocking the OLED"""
-    global menu_state, menu_selection, ip_address, subnet_mask, gateway
-    global time_format_24hr, last_interaction_time, web_command_queue
-
-    if not web_command_queue:
-        return
-
-    # Process one command at a time
-    with web_command_lock:
-        if web_command_queue:
-            cmd_data = web_command_queue.pop(0)
-        else:
-            return
-
-    try:
-        command = cmd_data.get('command')
-        params = cmd_data.get('params', {})
-
-        logging.info(f"Executing web command: {command}")
-
-        # Reset interaction time to prevent timeout
-        last_interaction_time = time.monotonic()
-
-        # Process different commands
-        if command == 'toggle_service':
-            service = params.get('service')
-            if service in ['companion', 'satellite']:
-                # Don't call toggle_service directly, just set the state
-                menu_state = "default"
-                # Schedule the service toggle
-                threading.Thread(target=lambda: toggle_service(service), daemon=True).start()
-                logging.info(f"Service toggle to {service} scheduled")
-
-        elif command == 'toggle_network':
-            network = params.get('network')
-            if network in ['DHCP', 'STATIC']:
-                # Don't block, run in background
-                menu_state = "default"
-                threading.Thread(target=lambda: toggle_network(network), daemon=True).start()
-                logging.info(f"Network toggle to {network} scheduled")
-
-        elif command == 'set_static_ip':
-            # Parse IP settings
-            ip_str = params.get('ip', '192.168.0.100')
-            subnet_str = params.get('subnet', '255.255.255.0')
-            gateway_str = params.get('gateway', '192.168.0.1')
-            dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
-
-            # Convert to lists
-            ip_address = [int(x) for x in ip_str.split('.')]
-            subnet_mask = [int(x) for x in subnet_str.split('.')]
-            gateway = [int(x) for x in gateway_str.split('.')]
-
-            # Run in background to avoid blocking
-            def apply_settings():
-                save_static_settings()
-                apply_static_settings(dns_str)
-                # Also update network mode to STATIC in state
-                state = load_state()
-                state["network"] = "STATIC"
-                save_state(state)
-                logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
-
-            threading.Thread(target=apply_settings, daemon=True).start()
-
-        elif command == 'power':
-            action = params.get('action')
-            if action == 'reboot':
-                logging.info("Rebooting system via web command")
-                turn_off_oled()
-                execute_command("sudo reboot")
-            elif action == 'shutdown':
-                logging.info("Shutting down system via web command")
-                turn_off_oled()
-                execute_command("sudo shutdown now")
-
-        elif command == 'button_press':
-            button = params.get('button')
-            logging.info(f"Simulating {button} press via web")
-
-            # Simulate button press without blocking
-            if button == 'K1':
-                button_k1_pressed()
-            elif button == 'K2':
-                button_k2_pressed()
-            elif button == 'K3':
-                button_k3_pressed()
-            elif button == 'K4':
-                button_k4_pressed()
-
-        elif command == 'set_datetime':
-            # Handle date/time setting in background
-            def set_dt():
-                if 'date' in params and 'time' in params:
-                    datetime_str = f"{params['date']} {params['time']}"
-                    execute_command(f"sudo timedatectl set-ntp false")
-                    execute_command(f"sudo timedatectl set-time '{datetime_str}'")
-                    logging.info(f"Set date/time to {datetime_str} via web")
-
-                if 'format_24hr' in params:
-                    global time_format_24hr
-                    time_format_24hr = params['format_24hr']
-                    state = load_state()
-                    state['time_format_24hr'] = time_format_24hr
-                    save_state(state)
-                    update_clock_format(time_format_24hr)
-
-                # Force timezone reload so display updates immediately
-                if 'TZ' in os.environ:
-                    del os.environ['TZ']
-                time.tzset()
-                logging.info("Forced timezone reload after datetime change")
-
-            threading.Thread(target=set_dt, daemon=True).start()
-
-        elif command == 'reload_timezone':
-            # Force reload of timezone info after timezone change from web
-            def reload_tz():
-                if 'TZ' in os.environ:
-                    del os.environ['TZ']
-                time.tzset()
-                logging.info("Forced timezone reload via web command")
-
-            threading.Thread(target=reload_tz, daemon=True).start()
-
-        elif command == 'update_companion_stable':
-            # Trigger companion update through OLED menu system
-            logging.info("Triggering Companion stable update via web")
-            if is_connected():
-                show_message("UPDATING\nCOMPANION", 2)
-                global updating_application
-                updating_application = True
-                execute_command_with_progress('sudo companion-update stable')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-        elif command == 'update_satellite_stable':
-            # Trigger satellite update through OLED menu system
-            logging.info("Triggering Satellite stable update via web")
-            if is_connected():
-                show_message("UPDATING\nSATELLITE", 2)
-                updating_application = True
-                execute_command_with_progress('sudo satellite-update stable')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-        elif command == 'update_companion_beta':
-            logging.info("Triggering Companion beta update via web")
-            if is_connected():
-                show_message("UPDATING\nCOMPANION BETA", 2)
-                updating_application = True
-                execute_command_with_progress('sudo companion-update beta')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-        elif command == 'update_satellite_beta':
-            logging.info("Triggering Satellite beta update via web")
-            if is_connected():
-                show_message("UPDATING\nSATELLITE BETA", 2)
-                updating_application = True
-                execute_command_with_progress('sudo satellite-update beta')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-        elif command == 'update_companion_version':
-            version = params.get('version', '')
-            logging.info(f"Triggering Companion update to specific version: {version}")
-            if is_connected() and version:
-                show_message(f"UPDATING\nCOMPANION\n{version}", 2)
-                updating_application = True
-                execute_command_with_progress(f'sudo companion-update stable {version}')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-        elif command == 'update_satellite_version':
-            version = params.get('version', '')
-            logging.info(f"Triggering Satellite update to specific version: {version}")
-            if is_connected() and version:
-                show_message(f"UPDATING\nSATELLITE\n{version}", 2)
-                updating_application = True
-                execute_command_with_progress(f'sudo satellite-update stable {version}')
-                updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
-            else:
-                show_message("PLEASE CONNECT\nTO INTERNET", 3)
-                menu_state = "default"
-
-    except Exception as e:
-        logging.error(f"Error executing web command: {e}")
-
-
-def process_web_commands():
-    """Process commands from the web GUI"""
-    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
-
-    while True:
-        try:
-            # Check if there's a trigger file
-            if os.path.exists(trigger_file):
-                os.remove(trigger_file)  # Remove trigger
-
-                # Check for command file
-                if os.path.exists(web_command_file):
-                    with open(web_command_file, 'r') as f:
-                        cmd_data = json.load(f)
-
-                    command = cmd_data.get('command')
-                    params = cmd_data.get('params', {})
-
-                    logging.info(f"Processing web command: {command}")
-
-                    # Process different commands
-                    if command == 'toggle_service':
-                        service = params.get('service')
-                        if service in ['companion', 'satellite']:
-                            toggle_service(service)
-                            logging.info(f"Toggled to {service} via web")
-
-                    elif command == 'toggle_network':
-                        network = params.get('network')
-                        if network in ['DHCP', 'STATIC']:
-                            toggle_network(network)
-                            logging.info(f"Toggled to {network} via web")
-
-                    elif command == 'set_static_ip':
-                        # Parse IP settings
-                        ip_str = params.get('ip', '192.168.0.100')
-                        subnet_str = params.get('subnet', '255.255.255.0')
-                        gateway_str = params.get('gateway', '192.168.0.1')
-                        dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
-
-                        # Convert to lists
-                        ip_address = [int(x) for x in ip_str.split('.')]
-                        subnet_mask = [int(x) for x in subnet_str.split('.')]
-                        gateway = [int(x) for x in gateway_str.split('.')]
-
-                        save_static_settings()
-                        apply_static_settings(dns_str)
-                        # Also update network mode to STATIC in state
-                        state = load_state()
-                        state["network"] = "STATIC"
-                        save_state(state)
-                        logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
-
-                    elif command == 'power':
-                        action = params.get('action')
-                        if action == 'reboot':
-                            logging.info("Rebooting system via web command")
-                            turn_off_oled()
-                            execute_command("sudo reboot")
-                        elif action == 'shutdown':
-                            logging.info("Shutting down system via web command")
-                            turn_off_oled()
-                            execute_command("sudo shutdown now")
-
-                    elif command == 'update_omnicon':
-                        version = params.get('version')
-                        if version:
-                            logging.info(f"Starting Omnicon update to version {version} via web")
-                            # Perform the update
-                            result = perform_update(version)
-                            logging.info(f"Update result: {result}")
-                        else:
-                            logging.error("No version specified for update")
-
-                    elif command == 'button_press':
-                        button = params.get('button')
-                        logging.info(f"Simulating {button} press via web")
-                        # Reset interaction time to prevent timeout
-                        global last_interaction_time
-                        last_interaction_time = time.monotonic()
-
-                        # Simulate button press
-                        if button == 'K1':
-                            button_k1_pressed()
-                        elif button == 'K2':
-                            button_k2_pressed()
-                        elif button == 'K3':
-                            button_k3_pressed()
-                        elif button == 'K4':
-                            button_k4_pressed()
-
-                        # Force display update
-                        update_oled_display()
-
-                    elif command == 'set_datetime':
-                        # Handle date/time setting
-                        if 'date' in params and 'time' in params:
-                            datetime_str = f"{params['date']} {params['time']}"
-                            execute_command(f"sudo timedatectl set-ntp false")
-                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
-                            logging.info(f"Set date/time to {datetime_str} via web")
-
-                        if 'format_24hr' in params:
-                            time_format_24hr = params['format_24hr']
-                            state = load_state()
-                            state['time_format_24hr'] = time_format_24hr
-                            save_state(state)
-                            update_clock_format(time_format_24hr)
-                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
-
-                    elif command == 'menu_navigate':
-                        # Direct menu navigation
-                        target_menu = params.get('menu')
-                        if target_menu:
-                            menu_state = target_menu
-                            menu_selection = 0
-                            update_oled_display()
-                            logging.info(f"Navigated to {target_menu} menu via web")
-
-                    # Remove command file after processing
-                    os.remove(web_command_file)
-
-        except Exception as e:
-            logging.error(f"Error processing web command: {e}")
-
-        # Check every 0.5 seconds for new commands
-        time.sleep(0.5)
-
-
-# Web command processor for remote control
 web_command_file = "web_command.json"
 trigger_file = "trigger_command"
 
-def process_web_commands():
-    """Process commands from the web GUI"""
-    global menu_state, menu_selection, ip_address, subnet_mask, gateway, time_format_24hr
-
-    while True:
-        try:
-            # Check if there's a trigger file
-            if os.path.exists(trigger_file):
-                os.remove(trigger_file)  # Remove trigger
-
-                # Check for command file
-                if os.path.exists(web_command_file):
-                    with open(web_command_file, 'r') as f:
-                        cmd_data = json.load(f)
-
-                    command = cmd_data.get('command')
-                    params = cmd_data.get('params', {})
-
-                    logging.info(f"Processing web command: {command}")
-
-                    # Process different commands
-                    if command == 'toggle_service':
-                        service = params.get('service')
-                        if service in ['companion', 'satellite']:
-                            toggle_service(service)
-                            logging.info(f"Toggled to {service} via web")
-
-                    elif command == 'toggle_network':
-                        network = params.get('network')
-                        if network in ['DHCP', 'STATIC']:
-                            toggle_network(network)
-                            logging.info(f"Toggled to {network} via web")
-
-                    elif command == 'set_static_ip':
-                        # Parse IP settings
-                        ip_str = params.get('ip', '192.168.0.100')
-                        subnet_str = params.get('subnet', '255.255.255.0')
-                        gateway_str = params.get('gateway', '192.168.0.1')
-                        dns_str = params.get('dns', gateway_str)  # Default to gateway if not provided
-
-                        # Convert to lists
-                        ip_address = [int(x) for x in ip_str.split('.')]
-                        subnet_mask = [int(x) for x in subnet_str.split('.')]
-                        gateway = [int(x) for x in gateway_str.split('.')]
-
-                        save_static_settings()
-                        apply_static_settings(dns_str)
-                        # Also update network mode to STATIC in state
-                        state = load_state()
-                        state["network"] = "STATIC"
-                        save_state(state)
-                        logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
-
-                    elif command == 'power':
-                        action = params.get('action')
-                        if action == 'reboot':
-                            logging.info("Rebooting system via web command")
-                            turn_off_oled()
-                            execute_command("sudo reboot")
-                        elif action == 'shutdown':
-                            logging.info("Shutting down system via web command")
-                            turn_off_oled()
-                            execute_command("sudo shutdown now")
-
-                    elif command == 'update_omnicon':
-                        version = params.get('version')
-                        if version:
-                            logging.info(f"Starting Omnicon update to version {version} via web")
-                            # Perform the update
-                            result = perform_update(version)
-                            logging.info(f"Update result: {result}")
-                        else:
-                            logging.error("No version specified for update")
-
-                    elif command == 'button_press':
-                        button = params.get('button')
-                        logging.info(f"Simulating {button} press via web")
-                        # Reset interaction time to prevent timeout
-                        global last_interaction_time
-                        last_interaction_time = time.monotonic()
-
-                        # Simulate button press
-                        if button == 'K1':
-                            button_k1_pressed()
-                        elif button == 'K2':
-                            button_k2_pressed()
-                        elif button == 'K3':
-                            button_k3_pressed()
-                        elif button == 'K4':
-                            button_k4_pressed()
-
-                        # Force display update
-                        update_oled_display()
-
-                    elif command == 'set_datetime':
-                        # Handle date/time setting
-                        if 'date' in params and 'time' in params:
-                            datetime_str = f"{params['date']} {params['time']}"
-                            execute_command(f"sudo timedatectl set-ntp false")
-                            execute_command(f"sudo timedatectl set-time '{datetime_str}'")
-                            logging.info(f"Set date/time to {datetime_str} via web")
-
-                        if 'format_24hr' in params:
-                            time_format_24hr = params['format_24hr']
-                            state = load_state()
-                            state['time_format_24hr'] = time_format_24hr
-                            save_state(state)
-                            update_clock_format(time_format_24hr)
-                            logging.info(f"Set time format to {'24hr' if time_format_24hr else '12hr'} via web")
-
-                    elif command == 'menu_navigate':
-                        # Direct menu navigation
-                        target_menu = params.get('menu')
-                        if target_menu:
-                            menu_state = target_menu
-                            menu_selection = 0
-                            update_oled_display()
-                            logging.info(f"Navigated to {target_menu} menu via web")
-
-                    # Remove command file after processing
-                    os.remove(web_command_file)
-
-        except Exception as e:
-            logging.error(f"Error processing web command: {e}")
-
-        # Check every 0.5 seconds for new commands
-        time.sleep(0.5)
-
-
-# Web command processor for remote control
 web_command_file = "web_command.json"
 trigger_file = "trigger_command"
 
@@ -3036,9 +2511,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo companion-update stable')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3050,9 +2524,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo satellite-update stable')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3063,9 +2536,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo companion-update beta')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3076,9 +2548,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo satellite-update beta')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3090,9 +2561,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress(f'sudo companion-update stable {version}')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3104,9 +2574,8 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress(f'sudo satellite-update stable {version}')
                             updating_application = False
-                            show_message("REBOOTING...", 2)
-                            turn_off_oled()
-                            execute_command("sudo reboot")
+                            ensure_fnm(reason="post-app-update")
+                            show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3320,6 +2789,219 @@ def disable_os_auto_upgrades():
         logging.error(f"Failed to disable OS auto-upgrades: {e}")
 
 
+# ============================================================================
+# SATELLITE fnm SELF-HEAL
+# `companion-update` (Bitfocus CompanionPi) runs `rm -rf /opt/fnm` because modern
+# Companion bundles its own Node. But Companion Satellite - co-installed on this
+# OMNICON image - needs /opt/fnm to RUN (satellite.service execs the Node there)
+# and to UPDATE. So every Companion update silently breaks Satellite. This module
+# detects a missing /opt/fnm and rebuilds it, offline-first from a local cache,
+# so a unit self-heals without the user doing anything.
+# ============================================================================
+FNM_VERSION = 'v1.38.1'
+FNM_URL = f'https://github.com/Schniz/fnm/releases/download/{FNM_VERSION}/fnm-arm64.zip'
+SATELLITE_SRC = '/usr/local/src/companion-satellite'
+FNM_DIR = '/opt/fnm'
+FNM_BIN = '/opt/fnm/fnm'
+FNM_DEFAULT_NODE = '/opt/fnm/aliases/default/bin/node'
+FNM_CACHE = '/home/omnicon/.fnm-cache'  # companion-update never touches /home
+
+
+def satellite_installed():
+    return os.path.isdir(SATELLITE_SRC)
+
+
+def fnm_healthy():
+    """True when both the fnm binary and a usable default Node are present."""
+    return os.path.exists(FNM_BIN) and os.path.exists(FNM_DEFAULT_NODE)
+
+
+def _fnm_reconcile():
+    """Run satellite's own non-interactive fnm setup (mirrors pi-image/update.sh
+    lines 19-27): install the pinned Node if missing and (re)point the default
+    alias. Offline-safe when the Node is already on disk (e.g. after a cache copy)."""
+    cmd = (f'set -e; cd "{SATELLITE_SRC}"; export FNM_DIR={FNM_DIR}; export PATH={FNM_DIR}:$PATH; '
+           'eval "$(fnm env)"; fnm use --install-if-missing; fnm default "$(fnm current)"')
+    subprocess.run(['sudo', 'bash', '-c', cmd], capture_output=True, text=True, timeout=300)
+
+
+def _cache_node_present():
+    """The cache is usable if it has the fnm binary and a real Node install
+    (checked via the concrete path, NOT the alias symlink which dangles when
+    /opt/fnm is deleted)."""
+    import glob
+    return (os.path.exists(os.path.join(FNM_CACHE, 'fnm')) and
+            bool(glob.glob(os.path.join(FNM_CACHE, 'node-versions/*/installation/bin/node'))))
+
+
+def refresh_fnm_cache():
+    """Snapshot a healthy /opt/fnm to /home/omnicon/.fnm-cache for offline restores.
+    Stamped by the current Node target so it's a no-op until the version changes
+    (e.g. after a Satellite update), avoiding a needless 200MB copy every boot."""
+    try:
+        if not fnm_healthy():
+            return
+        target = os.path.realpath(FNM_DEFAULT_NODE)
+        stamp = os.path.join(FNM_CACHE, '.source')
+        if _cache_node_present():
+            try:
+                with open(stamp) as f:
+                    if f.read().strip() == target:
+                        return  # cache already current
+            except OSError:
+                pass
+        subprocess.run(['sudo', 'rm', '-rf', FNM_CACHE], capture_output=True, timeout=60)
+        subprocess.run(['sudo', 'cp', '-a', FNM_DIR, FNM_CACHE], capture_output=True, timeout=180)
+        subprocess.run(['sudo', 'bash', '-c', f'echo "{target}" > "{stamp}"'], capture_output=True, timeout=10)
+        logging.info(f"fnm cache refreshed ({target})")
+    except Exception as e:
+        logging.error(f"refresh_fnm_cache failed: {e}")
+
+
+def _restore_fnm_from_cache():
+    """Copy the cached /opt/fnm back into place (offline). Returns True on success."""
+    if not _cache_node_present():
+        return False
+    try:
+        subprocess.run(['sudo', 'rm', '-rf', FNM_DIR], capture_output=True, timeout=60)
+        subprocess.run(['sudo', 'cp', '-a', FNM_CACHE, FNM_DIR], capture_output=True, timeout=180)
+        subprocess.run(['sudo', 'rm', '-f', os.path.join(FNM_DIR, '.source')], capture_output=True, timeout=10)
+        _fnm_reconcile()  # fix the default alias; Node already on disk so no download
+        return fnm_healthy()
+    except Exception as e:
+        logging.error(f"_restore_fnm_from_cache failed: {e}")
+        return False
+
+
+def _restore_fnm_by_download():
+    """Reinstall the fnm binary + pinned Node from the internet. Returns True on success."""
+    try:
+        install = ('set -e; mkdir -p /opt/fnm; '
+                   f'curl -fsSL "{FNM_URL}" -o /tmp/fnm.zip; cd /tmp && unzip -o fnm.zip; '
+                   'install -m 755 fnm /opt/fnm/fnm; rm -f /tmp/fnm.zip /tmp/fnm')
+        subprocess.run(['sudo', 'bash', '-c', install], capture_output=True, text=True, timeout=180)
+        if not os.path.exists(FNM_BIN):
+            return False
+        _fnm_reconcile()
+        return fnm_healthy()
+    except Exception as e:
+        logging.error(f"_restore_fnm_by_download failed: {e}")
+        return False
+
+
+def _show_heal_splash(message):
+    """Draw a centered splash and KEEP it up (message_displayed stays True) for the
+    duration of the heal. Same drawing as show_message() but without the fixed sleep."""
+    global message_displayed
+    message_displayed = True
+    try:
+        with oled_lock:
+            img = Image.new("1", (oled.width, oled.height))
+            d = ImageDraw.Draw(img)
+            lines = message.split('\n')
+
+            def _wh(s):  # width,height via textbbox (Pillow 8-10+, no deprecation)
+                l, t, r, b = d.textbbox((0, 0), s, font=font12)
+                return r - l, b - t
+            total_h = sum(_wh(l)[1] for l in lines)
+            y = (oled.height - total_h) // 2
+            for line in lines:
+                w, h = _wh(line)
+                d.text(((oled.width - w) // 2, y), line, font=font12, fill=255)
+                y += h
+            oled.image(img.rotate(180))
+            oled.show()
+    except Exception as e:
+        logging.error(f"_show_heal_splash failed: {e}")
+
+
+def _clear_heal_splash():
+    """Drop the splash so the normal display resumes on the next loop tick."""
+    global message_displayed, update_flag, timeout_flag
+    message_displayed = False
+    update_flag = True
+    timeout_flag = True
+
+
+_fnm_heal_lock = threading.Lock()
+
+
+def ensure_fnm(reason=""):
+    """Restore /opt/fnm if a Companion update deleted it. Offline-first (local
+    cache), download fallback, with an OLED 'self healing' splash. No-op (and
+    keeps the cache fresh) when already healthy. Serialized so concurrent
+    triggers (boot, watchdog, mode-switch) can't race."""
+    if not satellite_installed():
+        return
+    if fnm_healthy():
+        refresh_fnm_cache()
+        return
+    if not _fnm_heal_lock.acquire(blocking=False):
+        return  # a heal is already running
+    try:
+        if fnm_healthy():  # re-check inside the lock
+            return
+        logging.warning(f"ensure_fnm: /opt/fnm missing - restoring ({reason})")
+        _show_heal_splash("DO NOT UNPLUG\nSELF HEALING\nSATELLITE")
+        try:
+            if _restore_fnm_from_cache():
+                logging.info("ensure_fnm: restored from local cache (offline-safe)")
+                ok = True
+            elif is_connected() and _restore_fnm_by_download():
+                logging.info("ensure_fnm: restored by download")
+                refresh_fnm_cache()  # seed the cache now that we're healthy
+                ok = True
+            else:
+                ok = False
+
+            if ok:
+                _show_heal_splash("SATELLITE\nRESTORED")
+                time.sleep(2)
+                if load_state().get('service') == 'satellite':
+                    subprocess.run(['sudo', 'systemctl', 'restart', 'satellite'],
+                                   capture_output=True, timeout=30)
+                    logging.info("ensure_fnm: restarted satellite.service after restore")
+            else:
+                logging.warning("ensure_fnm: no cache and offline - will retry when online")
+                _show_heal_splash("SATELLITE REPAIR\nNEEDS INTERNET")
+                time.sleep(3)
+        finally:
+            _clear_heal_splash()
+    finally:
+        _fnm_heal_lock.release()
+
+
+def _update_in_progress():
+    """True while a Companion/Satellite/apt update is actively running, so the
+    watchdog defers instead of racing the updater's own file operations."""
+    try:
+        if updating_application:
+            return True
+        out = subprocess.run(['pgrep', '-f', 'companion-update|satellite-update|apt-get|dpkg'],
+                             capture_output=True, text=True, timeout=5).stdout
+        return bool(out.strip())
+    except Exception:
+        return False
+
+
+def fnm_watchdog_loop():
+    """Cause-agnostic self-heal: check /opt/fnm every 30s and rebuild it whenever
+    it's missing - regardless of how it was deleted (Companion update via any
+    path, corruption, etc.). No-op when healthy. Also keeps the offline cache fresh."""
+    logging.info("fnm watchdog started (30s)")
+    while True:
+        try:
+            if satellite_installed():
+                if not fnm_healthy():
+                    if not _update_in_progress():
+                        ensure_fnm(reason="watchdog")
+                else:
+                    refresh_fnm_cache()
+        except Exception as e:
+            logging.error(f"fnm_watchdog error: {e}")
+        time.sleep(30)
+
+
 def main():
     global datetime_temp, time_format_24hr
     initial_setup()
@@ -3353,6 +3035,10 @@ def main():
 
     # Stop Debian's unattended OS upgrades - the cause of the morning freezes
     disable_os_auto_upgrades()
+
+    # Self-heal Satellite's fnm runtime if a Companion update deleted it.
+    # Watchdog thread: checks on start + every 30s, offline-first restore.
+    threading.Thread(target=fnm_watchdog_loop, daemon=True).start()
 
     # Start web command processor thread
 
@@ -3573,9 +3259,8 @@ def activate_menu_item():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -3604,9 +3289,8 @@ def activate_menu_item():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
-                show_message("REBOOTING...", 2)
-                turn_off_oled()
-                execute_command("sudo reboot")
+                ensure_fnm(reason="post-app-update")
+                show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
