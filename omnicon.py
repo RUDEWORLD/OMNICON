@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.072
+# V4.2.073
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -878,17 +878,26 @@ def execute_command_with_progress(command):
 
         threading.Thread(target=drain, daemon=True).start()
 
+        # The % only tracks the DOWNLOAD. After it hits 100% the updater keeps
+        # working with no % output (tar extract, npx asar, yarn/npm, fnm Node
+        # setup - much heavier for Satellite), which used to look like a frozen
+        # 100%. Once we reach 100% we latch into an animated "Installing..." so
+        # it's clearly still working, and ignore any later stray % (avoids the
+        # bar jumping backwards if a post-download tool prints its own %).
         last_drawn = None
+        installing = False
+        anim = 0
         while not latest['done']:
             p = latest['pct']
-            if p is not None and p != last_drawn:
+            if not installing and p is not None and p >= 100:
+                installing = True
+            if installing or p is None:
+                update_oled_installing(anim)
+                anim += 1
+            elif p != last_drawn:
                 update_oled_with_progress(p)
                 last_drawn = p
             time.sleep(0.2)
-        # Final paint so we land on the last value (e.g. 100%)
-        p = latest['pct']
-        if p is not None and p != last_drawn:
-            update_oled_with_progress(p)
 
         process.stdout.close()
         process.wait()
@@ -921,6 +930,24 @@ def update_oled_with_progress(progress):
         bar_width = int((progress / 100) * (oled.width - 20))
         local_draw.rectangle((10, 50, 10 + bar_width, 58), outline=255, fill=255)
 
+        oled.image(local_image.rotate(180))
+        oled.show()
+
+
+def update_oled_installing(frame):
+    """Indeterminate 'Installing...' screen for the post-download phase (extract /
+    npm / node setup), which emits no %. Animated so it's obviously alive."""
+    with oled_lock:
+        local_image = Image.new("1", (oled.width, oled.height))
+        local_draw = ImageDraw.Draw(local_image)
+        local_draw.text((30, 0), "UPDATING", font=font12, fill=255)
+        local_draw.text((10, 16), "DO NOT TURN OFF", font=font12, fill=255)
+        local_draw.text((0, 32), "Installing" + "." * (frame % 4), font=font12, fill=255)
+        # A block that sweeps left->right as an indeterminate progress indicator.
+        track = oled.width - 20
+        sweep = 28
+        x = (frame * 6) % (track - sweep + 1)
+        local_draw.rectangle((10 + x, 50, 10 + x + sweep, 58), outline=255, fill=255)
         oled.image(local_image.rotate(180))
         oled.show()
 
@@ -2900,15 +2927,17 @@ def _show_heal_splash(message):
             d = ImageDraw.Draw(img)
             lines = message.split('\n')
 
-            def _wh(s):  # width,height via textbbox (Pillow 8-10+, no deprecation)
-                l, t, r, b = d.textbbox((0, 0), s, font=font12)
-                return r - l, b - t
-            total_h = sum(_wh(l)[1] for l in lines)
+            # Space lines by the font's REAL line height (ascent+descent), not the
+            # tight glyph bbox - otherwise multi-line text crowds/overlaps.
+            ascent, descent = font12.getmetrics()
+            line_h = ascent + descent
+            total_h = line_h * len(lines)
             y = (oled.height - total_h) // 2
             for line in lines:
-                w, h = _wh(line)
+                l, t, r, b = d.textbbox((0, 0), line, font=font12)
+                w = r - l
                 d.text(((oled.width - w) // 2, y), line, font=font12, fill=255)
-                y += h
+                y += line_h
             oled.image(img.rotate(180))
             oled.show()
     except Exception as e:
@@ -2921,6 +2950,37 @@ def _clear_heal_splash():
     message_displayed = False
     update_flag = True
     timeout_flag = True
+
+
+def _draw_heal_frame(message, frame):
+    """One animated frame of the self-heal splash: the message near the top with a
+    sweeping bar at the bottom, so a slow (download) restore never looks frozen."""
+    global message_displayed
+    message_displayed = True
+    try:
+        with oled_lock:
+            img = Image.new("1", (oled.width, oled.height))
+            d = ImageDraw.Draw(img)
+            lines = message.split('\n')
+            ascent, descent = font12.getmetrics()
+            line_h = ascent + descent
+            block_h = line_h * len(lines)
+            # Reserve ~12px at the bottom for the animated bar
+            y = max(0, (oled.height - 12 - block_h) // 2)
+            for line in lines:
+                l, t, r, b = d.textbbox((0, 0), line, font=font12)
+                w = r - l
+                d.text(((oled.width - w) // 2, y), line, font=font12, fill=255)
+                y += line_h
+            track = oled.width - 20
+            sweep = 24
+            x = (frame * 6) % (track - sweep + 1)
+            d.rectangle((10 + x, oled.height - 6, 10 + x + sweep, oled.height - 2),
+                        outline=255, fill=255)
+            oled.image(img.rotate(180))
+            oled.show()
+    except Exception as e:
+        logging.error(f"_draw_heal_frame failed: {e}")
 
 
 _fnm_heal_lock = threading.Lock()
@@ -2942,19 +3002,35 @@ def ensure_fnm(reason=""):
         if fnm_healthy():  # re-check inside the lock
             return
         logging.warning(f"ensure_fnm: /opt/fnm missing - restoring ({reason})")
-        _show_heal_splash("DO NOT UNPLUG\nSELF HEALING\nSATELLITE")
-        try:
-            if _restore_fnm_from_cache():
-                logging.info("ensure_fnm: restored from local cache (offline-safe)")
-                ok = True
-            elif is_connected() and _restore_fnm_by_download():
-                logging.info("ensure_fnm: restored by download")
-                refresh_fnm_cache()  # seed the cache now that we're healthy
-                ok = True
-            else:
-                ok = False
+        # Run the restore in a thread so the splash can ANIMATE while it works.
+        # A cache restore is a couple seconds, but a first-time download can take
+        # ~a minute - the sweeping bar shows it's alive the whole time.
+        result = {'done': False, 'ok': False}
 
-            if ok:
+        def _do_restore():
+            try:
+                if _restore_fnm_from_cache():
+                    logging.info("ensure_fnm: restored from local cache (offline-safe)")
+                    result['ok'] = True
+                elif is_connected() and _restore_fnm_by_download():
+                    logging.info("ensure_fnm: restored by download")
+                    refresh_fnm_cache()  # seed the cache now that we're healthy
+                    result['ok'] = True
+            except Exception as e:
+                logging.error(f"ensure_fnm restore error: {e}")
+            finally:
+                result['done'] = True
+
+        try:
+            _draw_heal_frame("DO NOT UNPLUG\nSELF HEALING\nSATELLITE", 0)  # show at once
+            threading.Thread(target=_do_restore, daemon=True).start()
+            frame = 1
+            while not result['done']:
+                _draw_heal_frame("DO NOT UNPLUG\nSELF HEALING\nSATELLITE", frame)
+                frame += 1
+                time.sleep(0.2)
+
+            if result['ok']:
                 _show_heal_splash("SATELLITE\nRESTORED")
                 time.sleep(2)
                 if load_state().get('service') == 'satellite':
