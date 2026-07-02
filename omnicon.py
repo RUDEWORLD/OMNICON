@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.073
+# V4.2.074
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -51,7 +51,7 @@ def run_kiosk_gui():
     try:
         with open('/home/omnicon/OLED_Stats/web_config.json', 'r') as f:
             port = json.load(f).get('port', 8080)
-    except:
+    except Exception:
         pass
 
     # Create fullscreen window
@@ -245,7 +245,7 @@ def start_kiosk():
                         os.environ['XDG_RUNTIME_DIR'] = runtime_dir
                         logging.info(f"Found display {item} after {attempt}s")
                         break
-        except:
+        except Exception:
             pass
 
         if os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY'):
@@ -263,7 +263,7 @@ def start_kiosk():
     try:
         import gi
         gi.require_version('WebKit2', '4.1')
-    except:
+    except Exception:
         subprocess.run(['sudo', 'apt-get', 'install', '-y', 'gir1.2-webkit2-4.1'],
                       capture_output=True, timeout=120)
 
@@ -272,6 +272,9 @@ def start_kiosk():
     p = multiprocessing.Process(target=run_kiosk_gui, daemon=True)
     p.start()
     logging.info(f"Kiosk started (PID: {p.pid})")
+    # Reap the kiosk when it exits: join() collects the child, so a closed or
+    # crashed kiosk doesn't linger as a <defunct> zombie process.
+    threading.Thread(target=p.join, daemon=True).start()
     return p
 
 # ============================================================================
@@ -526,16 +529,24 @@ table ip nat {
 
 # Function to check if a service is active
 def is_service_active(service_name):
-    result = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True)
-    return result.stdout.strip() == "active"
+    try:
+        result = subprocess.run(["systemctl", "is-active", service_name],
+                                capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() == "active"
+    except Exception:
+        return False  # timeout/hang counts as not-active rather than freezing the caller
 
 # Function to get active network connection
 def get_active_connection():
-    result = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,NAME", "connection", "show", "--active"], capture_output=True, text=True)
-    for line in result.stdout.splitlines():
-        active, name = line.split(':')
-        if active == "yes":
-            return name
+    try:
+        result = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,NAME", "connection", "show", "--active"],
+                                capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            active, name = line.split(':', 1)  # maxsplit: profile names may contain ':'
+            if active == "yes":
+                return name
+    except Exception as e:
+        logging.error(f"get_active_connection failed: {e}")
     return None
 
 # DEFINE COMP & SAT VERSION FOR MENU
@@ -580,10 +591,37 @@ def initial_setup():
     elif state["network"] == "STATIC" and current_network != STATIC_PROFILE:
         switch_network_profile(STATIC_PROFILE)
 
+def enforce_single_app_service():
+    """HARD INVARIANT: Companion and Satellite must NEVER run simultaneously.
+
+    The Bitfocus update wrappers unconditionally (re)start the app they just
+    updated - companion-update literally ends with `systemctl start companion`
+    even when this unit is in Satellite mode. The old post-update reboot
+    accidentally masked that (boot re-asserts the mode from state.json); with
+    the reboot gone this guard does it explicitly: if BOTH are active, stop
+    the one state.json does not name. Stop-only by design - starting the
+    intended app is the job of startup/toggle, so this can never fight
+    systemd over a crash-looping service."""
+    try:
+        mode = load_state().get('service', 'companion')
+        other = 'satellite' if mode == 'companion' else 'companion'
+        if is_service_active(f"{other}.service") and is_service_active(f"{mode}.service"):
+            logging.warning(f"INVARIANT: both app services active (mode={mode}) - stopping {other}")
+            subprocess.run(['sudo', 'systemctl', 'stop', other],
+                           capture_output=True, timeout=60)
+            invalidate_stats_cache()  # OLED reflects the correction immediately
+    except Exception as e:
+        logging.error(f"enforce_single_app_service failed: {e}")
+
+
 def toggle_service(service=None):
     state = load_state()
     if service:
         state["service"] = service
+    # Save the chosen mode FIRST (declare intent before acting): if the
+    # single-app guard fires mid-toggle it then pushes toward the SAME target
+    # instead of racing us back to the old mode.
+    save_state(state)
     if state["service"] == "companion":
         logging.info('Toggling to Companion service.')
         if is_service_active("satellite.service"):
@@ -599,7 +637,6 @@ def toggle_service(service=None):
         if is_service_active("companion.service"):
             execute_command(command_stop_companion)
         execute_command(command_start_satellite)
-    save_state(state)
     invalidate_stats_cache()  # OLED title reflects the new service immediately
 
 def toggle_network(network=None):
@@ -733,15 +770,33 @@ indicators = {
 
 # Function to get current network settings
 def get_current_network_settings():
-    ip = subprocess.check_output(["hostname", "-I"]).decode('utf-8').strip().split()[0]
-    subnet = subprocess.check_output(["ip", "-o", "-f", "inet", "addr", "show"]).decode('utf-8')
-    subnet = [line.split()[3] for line in subnet.splitlines() if 'eth0' in line]
-    subnet = subnet[0].split('/')[1] if subnet else "N/A"
-    subnet = cidr_to_subnet_mask(subnet)
-    gateway = subprocess.check_output(["ip", "route", "show", "default"]).decode('utf-8').split()[2]
-    dns = subprocess.check_output(["nmcli", "dev", "show"]).decode('utf-8')
-    dns_servers = [line.split(':')[-1].strip() for line in dns.splitlines() if 'IP4.DNS' in line]
-    dns = dns_servers[0] if dns_servers else "N/A"
+    """Info for the NETWORK INFO screen. Each value is independently
+    timeout-guarded with an N/A fallback: this runs on the render path, and the
+    old version had no timeouts (a hung nmcli froze the OLED) and crashed with
+    no network (hostname -I returns nothing -> [0] IndexError; subnet 'N/A' ->
+    int() ValueError in cidr_to_subnet_mask)."""
+    try:
+        out = subprocess.check_output(["hostname", "-I"], timeout=5).decode('utf-8').strip().split()
+        ip = out[0] if out else "N/A"
+    except Exception:
+        ip = "N/A"
+    try:
+        subnet_out = subprocess.check_output(["ip", "-o", "-f", "inet", "addr", "show"], timeout=5).decode('utf-8')
+        cidrs = [line.split()[3] for line in subnet_out.splitlines() if 'eth0' in line]
+        subnet = cidr_to_subnet_mask(cidrs[0].split('/')[1]) if cidrs else "N/A"
+    except Exception:
+        subnet = "N/A"
+    try:
+        gw_out = subprocess.check_output(["ip", "route", "show", "default"], timeout=5).decode('utf-8').split()
+        gateway = gw_out[2] if len(gw_out) > 2 else "N/A"
+    except Exception:
+        gateway = "N/A"
+    try:
+        dns_out = subprocess.check_output(["nmcli", "dev", "show"], timeout=5).decode('utf-8')
+        dns_servers = [line.split(':')[-1].strip() for line in dns_out.splitlines() if 'IP4.DNS' in line]
+        dns = dns_servers[0] if dns_servers else "N/A"
+    except Exception:
+        dns = "N/A"
     return ip, subnet, gateway, dns
 
 def get_lan_network_info():
@@ -752,7 +807,7 @@ def get_lan_network_info():
 
         # Get IP address for eth0
         try:
-            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "eth0"], text=True)
+            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "eth0"], text=True, timeout=5)
             ip = "N/A"
             subnet = "N/A"
             for line in ip_output.split('\n'):
@@ -763,15 +818,15 @@ def get_lan_network_info():
                     cidr = ip_with_cidr.split('/')[1]
                     subnet = cidr_to_subnet_mask(cidr)
                     break
-        except:
+        except Exception:
             ip = "N/A"
             subnet = "N/A"
 
         # Get gateway
         try:
-            gw_output = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+            gw_output = subprocess.check_output(["ip", "route", "show", "default"], text=True, timeout=5)
             gateway = gw_output.split()[2] if gw_output else "N/A"
-        except:
+        except Exception:
             gateway = "N/A"
 
         return mode, ip, subnet, gateway
@@ -796,7 +851,7 @@ def get_wifi_network_info():
                     wifi_enabled = state_val not in ['unavailable', 'unmanaged']
                     wifi_connected = state_val == 'connected'
                     break
-        except:
+        except Exception:
             return None  # WiFi not available
 
         if not wifi_enabled:
@@ -817,12 +872,12 @@ def get_wifi_network_info():
                 if len(parts) >= 2 and parts[0] == 'yes':
                     ssid = parts[1]
                     break
-        except:
+        except Exception:
             ssid = "Unknown"
 
         # Get IP address for wlan0
         try:
-            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "wlan0"], text=True)
+            ip_output = subprocess.check_output(["ip", "-4", "addr", "show", "wlan0"], text=True, timeout=5)
             ip = "N/A"
             subnet = "N/A"
             for line in ip_output.split('\n'):
@@ -833,15 +888,15 @@ def get_wifi_network_info():
                     cidr = ip_with_cidr.split('/')[1]
                     subnet = cidr_to_subnet_mask(cidr)
                     break
-        except:
+        except Exception:
             ip = "N/A"
             subnet = "N/A"
 
         # Get gateway (might be different from LAN)
         try:
-            gw_output = subprocess.check_output(["ip", "route", "show", "default", "dev", "wlan0"], text=True)
+            gw_output = subprocess.check_output(["ip", "route", "show", "default", "dev", "wlan0"], text=True, timeout=5)
             gateway = gw_output.split()[2] if gw_output else "N/A"
-        except:
+        except Exception:
             gateway = "N/A"
 
         return ssid, ip, subnet, gateway
@@ -849,60 +904,289 @@ def get_wifi_network_info():
         logging.error(f"Error getting WiFi info: {e}")
         return None
 
+# ============================================================================
+# UNIFIED UPDATE SCREEN
+# One screen for the whole Companion/Satellite update:
+#     UPDATING COMPANION
+#     DO NOT UNPLUG
+#     EXTRACTING            ~50s
+#     [############............]
+# The phase label is REAL (parsed from the updater's own output markers); the
+# bar and time-remaining are ESTIMATES learned from this unit's previous
+# updates (per app, per phase, in diagnostics/update_times.json, blended 50/50
+# after each run). The first-ever update uses ballpark defaults and
+# self-corrects from then on. The bar caps at 99% until the process actually
+# exits, and the real wget % drives the bar within the DOWNLOADING slice.
+# ============================================================================
+UPDATE_PHASES = ['PREPARING', 'DOWNLOADING', 'EXTRACTING', 'FINISHING', 'FINALIZING']
+_DEFAULT_PHASE_TIMES = {'PREPARING': 12.0, 'DOWNLOADING': 15.0,
+                        'EXTRACTING': 35.0, 'FINISHING': 25.0,
+                        'FINALIZING': 20.0}  # the fnm self-heal after companion updates
+
+
+def _update_times_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'diagnostics', 'update_times.json')
+
+
+def _load_update_times(app):
+    """Learned per-phase durations for this app, defaults where unknown."""
+    try:
+        with open(_update_times_path()) as f:
+            stored = json.load(f).get(app, {})
+    except Exception:
+        stored = {}
+    return {p: float(stored.get(p, _DEFAULT_PHASE_TIMES[p])) for p in UPDATE_PHASES}
+
+
+def _save_update_times(app, observed):
+    """Blend this run's observed phase durations into the history (50/50)."""
+    try:
+        path = _update_times_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        cur = data.get(app, {})
+        for phase, secs in observed.items():
+            old = float(cur.get(phase, _DEFAULT_PHASE_TIMES.get(phase, secs)))
+            cur[phase] = round(0.5 * old + 0.5 * secs, 1)
+        data[app] = cur
+        with open(path, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        logging.error(f"_save_update_times failed: {e}")
+
+
+def _fit_font(d, text, max_w=124):
+    """Largest font (12 down to 9) that fits the OLED width for this text."""
+    for f in (font12, font11, font10, font9):
+        l, t, r, b = d.textbbox((0, 0), text, font=f)
+        if r - l <= max_w:
+            return f
+    return font9
+
+
+def update_oled_update_screen(title, phase, pct, eta_secs):
+    """Render the unified update screen: title / DO NOT UNPLUG / phase + ETA /
+    outlined progress bar."""
+    with oled_lock:
+        img = Image.new("1", (oled.width, oled.height))
+        d = ImageDraw.Draw(img)
+
+        def center(text, y):
+            f = _fit_font(d, text)
+            l, t, r, b = d.textbbox((0, 0), text, font=f)
+            d.text(((oled.width - (r - l)) // 2, y), text, font=f, fill=255)
+
+        center(title, 0)
+        center("DO NOT UNPLUG", 15)
+        d.text((4, 31), phase, font=font11, fill=255)
+        if eta_secs is not None:
+            if eta_secs >= 90:
+                eta = f"~{round(eta_secs / 60.0)}m"
+            else:
+                secs = max(int(eta_secs), 1)
+                eta = f"~{((secs + 4) // 5) * 5}s"  # round up to nearest 5s
+            l, t, r, b = d.textbbox((0, 0), eta, font=font11)
+            d.text((oled.width - (r - l) - 4, 31), eta, font=font11, fill=255)
+        # Outlined gauge with fill so it reads as a bar even when nearly empty
+        d.rectangle((10, 48, 118, 58), outline=255, fill=0)
+        fill_w = int((min(pct, 99) / 100.0) * 106)
+        if fill_w > 0:
+            d.rectangle((11, 49, 11 + fill_w, 57), outline=255, fill=255)
+        oled.image(img.rotate(180))
+        oled.show()
+
+
+def resolve_bitfocus_package(app_name, version):
+    """Look up the exact tarball for a specific Companion/Satellite version on
+    the Bitfocus API. Returns (uri, exact_name) or (None, None). Version match
+    is v-prefix agnostic ('4.3.3' == 'v4.3.3')."""
+    product = 'companion' if app_name == 'companion' else 'companion-satellite'
+    want = str(version).lstrip('vV')
+    try:
+        import urllib.request
+        url = (f"https://api.bitfocus.io/v1/product/{product}/packages"
+               f"?branch=stable&limit=50&target=linux-arm64-tgz")
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        for pkg in data.get('packages', []):
+            if (pkg.get('target') == 'linux-arm64-tgz'
+                    and str(pkg.get('version', '')).lstrip('vV') == want):
+                return pkg.get('uri'), pkg.get('version')
+    except Exception as e:
+        logging.error(f"resolve_bitfocus_package({app_name}, {version}) failed: {e}")
+    return None, None
+
+
+def build_versioned_update_command(app_name, version):
+    """Update Companion/Satellite to a SPECIFIC version.
+
+    Two upstream Bitfocus bugs make the naive `sudo companion-update stable X`
+    silently install the LATEST instead of X:
+      1. The wrappers forward only $1 to update.sh ('./update.sh $1'), so the
+         version argument is dropped. We replicate the tiny wrapper inline and
+         pass BOTH branch and version.
+      2. The current CompanionPi picker fetches only the single NEWEST build in
+         non-interactive mode, so any other requested version is "not found"
+         and skipped. Countermeasure: resolve the exact tarball URI from the
+         Bitfocus API ourselves and PRE-SEED the picker's selection file - the
+         picker never deletes it (it only writes on success), and update.sh
+         installs whatever selection exists after the picker runs.
+    Plain ';' separators (not bash -e) so the service is started again even if
+    a step fails, and seed files are cleaned up afterwards so a failed run
+    can't leave a stale selection for a future manual update."""
+    safe_ver = re.sub(r'[^0-9A-Za-z._-]', '', str(version))
+    uri, exact_name = resolve_bitfocus_package(app_name, safe_ver)
+    seed = cleanup = ''
+    if uri and re.fullmatch(r'https://[0-9A-Za-z._~:/?#@!$&()*+,;=%-]+', uri):
+        logging.info(f"{app_name} {safe_ver} resolved to {uri}")
+        if app_name == 'companion':
+            seed = f'printf %s "{uri}" > /tmp/companion-version-selection; '
+            cleanup = 'rm -f /tmp/companion-version-selection; '
+        else:
+            seed = (f'printf %s "{uri}" > /tmp/satellite-version-selection; '
+                    f'printf %s "{exact_name}" > /tmp/satellite-version-selection-name; ')
+            cleanup = 'rm -f /tmp/satellite-version-selection /tmp/satellite-version-selection-name; '
+    else:
+        logging.warning(f"{app_name} {safe_ver}: no API match - relying on the picker alone")
+    if app_name == 'companion':
+        return ("sudo bash -c '" + seed +
+                "systemctl stop companion; "
+                "cd /usr/local/src/companionpi && git pull -q; "
+                f"./update.sh stable {safe_ver}; " + cleanup +
+                "systemctl start companion; echo Update is complete'")
+    return ("sudo bash -c '" + seed +
+            "systemctl stop satellite; "
+            "cd /usr/local/src/companion-satellite && git pull -q; "
+            f"./pi-image/update.sh stable {safe_ver}; " + cleanup +
+            "systemctl start satellite; echo Update is complete'")
+
+
 # FUNCTION TO UPDATE COMMAND WITH PROGRESS
 def execute_command_with_progress(command):
-    """Run a command and show its % progress on the OLED.
+    """Run a Companion/Satellite update with the unified update screen.
 
-    The command's output is drained by a BACKGROUND thread so the subprocess is
-    never throttled by OLED paint speed. The old version read a line then painted
-    the slow I2C OLED before reading the next line, so it drained the pipe only as
-    fast as it could draw - pipe backpressure throttled e.g. a 3-second, 300MB
-    download into 5-10 minutes. Here the drain thread reads at full speed while
-    the OLED is repainted at most ~5x/sec and only when the whole-number % changes.
-    """
+    Output is drained by a background thread at full speed (pipe backpressure
+    once throttled a 3-second download into 5-10 minutes of OLED-paint-speed
+    reads). The drain thread watches for the updater's own phase markers:
+    "Installing from ..." -> DOWNLOADING, "Extracting..." -> EXTRACTING,
+    "Finishing" -> FINISHING; everything before is PREPARING. wget percentages
+    are only honored during DOWNLOADING so tools that print their own % (fnm,
+    yarn) can't fake download progress.
+
+    Owns the OLED for its whole duration: sets the updating_application global
+    itself (gates update_oled_display) so no caller can ever forget it and put
+    two painters on the screen at once."""
+    global updating_application
+    # satellite checked first: 'companion-satellite' contains 'companion'
+    app = ('satellite' if ('satellite-update' in command or 'companion-satellite' in command)
+           else 'companion' if ('companion-update' in command or 'companionpi' in command)
+           else 'app')
+    title = {'companion': 'UPDATING COMPANION',
+             'satellite': 'UPDATING SATELLITE'}.get(app, 'UPDATING')
+    times = _load_update_times(app)
+    updating_application = True
     try:
         process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True)
-        latest = {'pct': None, 'done': False}
+        state = {'done': False, 'phase': 'PREPARING', 'dl_pct': None}
+        phase_started = {'PREPARING': time.monotonic()}
+        observed = {}
+
+        def set_phase(new):
+            old = state['phase']
+            if UPDATE_PHASES.index(new) <= UPDATE_PHASES.index(old):
+                return  # phases only ever move forward
+            now = time.monotonic()
+            observed[old] = now - phase_started[old]
+            phase_started[new] = now
+            state['phase'] = new
 
         def drain():
             try:
                 for line in iter(process.stdout.readline, ''):
                     if line == '':
                         break
-                    p = parse_progress(line)
-                    if p is not None:
-                        latest['pct'] = p
+                    low = line.strip().lower()
+                    # Journal the updater's key decision lines (selected what?
+                    # skipped why?) - invaluable when a user reports "it said
+                    # complete but nothing changed". Bounded: a handful per run.
+                    if any(m in low for m in ('selected', 'no matching', 'no version',
+                                              'already installed', 'skipping',
+                                              'installing from', 'error')):
+                        logging.info(f"updater: {line.strip()}")
+                    if low.startswith('installing from'):
+                        set_phase('DOWNLOADING')
+                    elif low.startswith('extracting'):
+                        set_phase('EXTRACTING')
+                    elif low.startswith('finishing'):
+                        set_phase('FINISHING')
+                    if state['phase'] == 'DOWNLOADING':
+                        p = parse_progress(line)
+                        if p is not None:
+                            state['dl_pct'] = p
             finally:
-                latest['done'] = True
+                state['done'] = True
 
         threading.Thread(target=drain, daemon=True).start()
 
-        # The % only tracks the DOWNLOAD. After it hits 100% the updater keeps
-        # working with no % output (tar extract, npx asar, yarn/npm, fnm Node
-        # setup - much heavier for Satellite), which used to look like a frozen
-        # 100%. Once we reach 100% we latch into an animated "Installing..." so
-        # it's clearly still working, and ignore any later stray % (avoids the
-        # bar jumping backwards if a post-download tool prints its own %).
-        last_drawn = None
-        installing = False
-        anim = 0
-        while not latest['done']:
-            p = latest['pct']
-            if not installing and p is not None and p >= 100:
-                installing = True
-            if installing or p is None:
-                update_oled_installing(anim)
-                anim += 1
-            elif p != last_drawn:
-                update_oled_with_progress(p)
-                last_drawn = p
-            time.sleep(0.2)
+        total = sum(times.values())
+
+        def render_now():
+            ph = state['phase']
+            idx = UPDATE_PHASES.index(ph)
+            elapsed_in_phase = time.monotonic() - phase_started[ph]
+            if ph == 'DOWNLOADING' and state['dl_pct'] is not None:
+                frac = min(state['dl_pct'] / 100.0, 1.0)  # real download progress
+            else:
+                frac = min(elapsed_in_phase / max(times[ph], 1.0), 1.0)
+            done_secs = sum(times[p] for p in UPDATE_PHASES[:idx])
+            pct = (done_secs + frac * times[ph]) / total * 100.0
+            eta = max(times[ph] * (1.0 - frac), 0.0) + sum(times[p] for p in UPDATE_PHASES[idx + 1:])
+            update_oled_update_screen(title, ph, pct, eta)
+
+        while not state['done']:
+            render_now()
+            time.sleep(0.5)
 
         process.stdout.close()
         process.wait()
+
+        # FINALIZING: run the fnm self-heal as the last stage of the SAME
+        # screen/bar (a companion update just deleted /opt/fnm; for satellite
+        # it's a quick no-op). The heal draws nothing itself here - this loop
+        # keeps rendering, and the phase's duration is learned like the others.
+        set_phase('FINALIZING')
+        heal = {'ok': True, 'done': False}
+
+        def do_heal():
+            try:
+                heal['ok'] = ensure_fnm(reason="post-app-update", show_splash=False)
+                # The wrapper just unconditionally started the app it updated,
+                # even if this unit is in the OTHER mode - kill any dual-run.
+                enforce_single_app_service()
+            finally:
+                heal['done'] = True
+
+        threading.Thread(target=do_heal, daemon=True).start()
+        while not heal['done']:
+            render_now()
+            time.sleep(0.5)
+
+        # Record the final phase's duration, then learn from this run
+        observed[state['phase']] = time.monotonic() - phase_started[state['phase']]
+        if app != 'app':
+            _save_update_times(app, observed)
+        if not heal['ok']:
+            show_message("UPDATE INCOMPLETE\nNEEDS INTERNET", 3)
     except Exception as e:
         logging.error(f"Error executing command with progress: {e}")
+    finally:
+        updating_application = False  # release the OLED no matter how we exit
 
 # PARSE PROGRESS
 def parse_progress(output_line):
@@ -934,37 +1218,36 @@ def update_oled_with_progress(progress):
         oled.show()
 
 
-def update_oled_installing(frame):
-    """Indeterminate 'Installing...' screen for the post-download phase (extract /
-    npm / node setup), which emits no %. Animated so it's obviously alive."""
-    with oled_lock:
-        local_image = Image.new("1", (oled.width, oled.height))
-        local_draw = ImageDraw.Draw(local_image)
-        local_draw.text((30, 0), "UPDATING", font=font12, fill=255)
-        local_draw.text((10, 16), "DO NOT TURN OFF", font=font12, fill=255)
-        local_draw.text((0, 32), "Installing" + "." * (frame % 4), font=font12, fill=255)
-        # A block that sweeps left->right as an indeterminate progress indicator.
-        track = oled.width - 20
-        sweep = 28
-        x = (frame * 6) % (track - sweep + 1)
-        local_draw.rectangle((10 + x, 50, 10 + x + sweep, 58), outline=255, fill=255)
-        oled.image(local_image.rotate(180))
-        oled.show()
-
 def cidr_to_subnet_mask(cidr):
     cidr = int(cidr)
     mask = (0xffffffff >> (32 - cidr)) << (32 - cidr)
     return f'{(mask >> 24) & 0xff}.{(mask >> 16) & 0xff}.{(mask >> 8) & 0xff}.{mask & 0xff}'
 
+_pi_health_last_voltage = "0.0000"
+
 def get_pi_health():
-    temp = subprocess.check_output(["vcgencmd", "measure_temp"]).decode('utf-8').strip().split('=')[1]
-    voltage = subprocess.check_output(["vcgencmd", "measure_volts"]).decode('utf-8').strip().split('=')[1].replace('V', '')
-    cpu_usage = psutil.cpu_percent(interval=1)  # Using psutil for accurate CPU usage
-    memory = subprocess.check_output(["free", "-m"]).decode('utf-8')
-    memory = [line for line in memory.split('\n') if "Mem:" in line][0].split()
-    memory_used = int(memory[2]) / 1024
-    memory_total = int(memory[1]) / 1024
-    memory_percentage = (memory_used / memory_total) * 100
+    """Vitals for the PI HEALTH screen - same values/format as before, but safe
+    for the per-second render path: cpu_percent(interval=None) is non-blocking
+    (the old interval=1 froze the display thread for a full second per redraw),
+    temp/memory read /sys and /proc directly, and the one remaining fork
+    (vcgencmd for voltage, which has no /sys equivalent) has a timeout with a
+    last-known-value fallback so a hang can't freeze the OLED."""
+    global _pi_health_last_voltage
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp') as f:
+            temp = f"{int(f.read().strip()) / 1000.0:.1f}'C"
+    except Exception:
+        temp = "N/A"
+    try:
+        v_out = subprocess.check_output(["vcgencmd", "measure_volts"], timeout=5).decode('utf-8')
+        _pi_health_last_voltage = v_out.strip().split('=')[1].replace('V', '')
+    except Exception:
+        pass  # keep last known voltage
+    voltage = _pi_health_last_voltage
+    cpu_usage = psutil.cpu_percent(interval=None)  # avg since last call, no 1s block
+    vm = psutil.virtual_memory()
+    memory_used = vm.used / (1024 ** 3)
+    memory_total = vm.total / (1024 ** 3)
     watt_input = float(voltage) * 0.85  # Assuming the current draw is approximately 0.85A
     return temp, voltage, watt_input, cpu_usage, f"{memory_used:.2f}/{memory_total:.2f}GB"
 
@@ -1567,6 +1850,8 @@ def button_k4_pressed():
     global menu_state, menu_selection, ip_octet, ip_address, subnet_mask, gateway
     global original_ip_address, original_subnet_mask, original_gateway
     global datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
+    global updating_application  # was missing: its assignment below created a LOCAL,
+    # so the display loop kept fighting the update screen (rapid flashing)
     logging.debug("K4 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False  # Reset timeout flag
@@ -1615,13 +1900,12 @@ def button_k4_pressed():
         if idx < len(app_version_list):
             selected_ver = app_version_list[idx]
             app_name = "companion" if menu_state == "pick_companion_version" else "satellite"
-            update_cmd = f"sudo {app_name}-update stable {selected_ver}"
+            update_cmd = build_versioned_update_command(app_name, selected_ver)
             if is_connected():
                 show_message(f"UPDATING\n{app_name.upper()}\n{selected_ver}", 2)
                 updating_application = True
                 execute_command_with_progress(update_cmd)
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -1890,8 +2174,12 @@ def download_and_extract_zip_from_github(tag, extract_to):
         # Show downloading message
         show_message(f"DOWNLOADING\n{tag}...", 0.5)
 
-        # Download the ZIP file with progress
-        r = requests.get(zip_url, stream=True)
+        # Download the ZIP file with progress.
+        # timeout=(connect, read-between-chunks): a dead network mid-download
+        # raises instead of blocking forever - without this, a stalled update
+        # left updating_application=True and froze the OLED until power cycle.
+        # The except below turns it into a clean "UPDATE FAILED".
+        r = requests.get(zip_url, stream=True, timeout=(10, 60))
         r.raise_for_status()
 
         total_size = int(r.headers.get('content-length', 0))
@@ -2026,7 +2314,7 @@ def fetch_github_tags():
                             logging.error(f"Rate limit remaining: {remaining}, resets at: {reset_datetime}")
                         else:
                             logging.error(f"Rate limit remaining: {remaining}")
-                    except:
+                    except Exception:
                         pass
             continue
         except requests.exceptions.RequestException as e:
@@ -2326,7 +2614,6 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2340,7 +2627,6 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2353,7 +2639,6 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update beta')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2366,7 +2651,6 @@ def execute_web_commands():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update beta')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2378,9 +2662,8 @@ def execute_web_commands():
             if is_connected() and version:
                 show_message(f"UPDATING\nCOMPANION\n{version}", 2)
                 updating_application = True
-                execute_command_with_progress(f'sudo companion-update stable {version}')
+                execute_command_with_progress(build_versioned_update_command('companion', version))
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2392,9 +2675,8 @@ def execute_web_commands():
             if is_connected() and version:
                 show_message(f"UPDATING\nSATELLITE\n{version}", 2)
                 updating_application = True
-                execute_command_with_progress(f'sudo satellite-update stable {version}')
+                execute_command_with_progress(build_versioned_update_command('satellite', version))
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2538,7 +2820,6 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo companion-update stable')
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2551,7 +2832,6 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo satellite-update stable')
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2563,7 +2843,6 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo companion-update beta')
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2575,7 +2854,6 @@ def process_web_commands():
                             updating_application = True
                             execute_command_with_progress('sudo satellite-update beta')
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2586,9 +2864,8 @@ def process_web_commands():
                         if is_connected() and version:
                             show_message(f"UPDATING\nCOMPANION\n{version}", 2)
                             updating_application = True
-                            execute_command_with_progress(f'sudo companion-update stable {version}')
+                            execute_command_with_progress(build_versioned_update_command('companion', version))
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2599,9 +2876,8 @@ def process_web_commands():
                         if is_connected() and version:
                             show_message(f"UPDATING\nSATELLITE\n{version}", 2)
                             updating_application = True
-                            execute_command_with_progress(f'sudo satellite-update stable {version}')
+                            execute_command_with_progress(build_versioned_update_command('satellite', version))
                             updating_application = False
-                            ensure_fnm(reason="post-app-update")
                             show_message("UPDATE COMPLETE", 2)
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -2984,23 +3260,57 @@ def _draw_heal_frame(message, frame):
 
 
 _fnm_heal_lock = threading.Lock()
+_fnm_last_impossible = 0.0  # backoff stamp: broken but offline with no cache
+
+# What the splash says depends on what the USER was doing - satellite wording
+# when they chose satellite, neutral wording for background repairs (a
+# companion user must never see satellite talk). The post-update heal draws
+# nothing here at all: it runs as the FINALIZING stage of the unified update
+# screen inside execute_command_with_progress (show_splash=False).
+_HEAL_MESSAGES = {
+    'switch-to-satellite': ("DO NOT UNPLUG\nPREPARING\nSATELLITE", "SATELLITE NEEDS\nINTERNET"),
+}
+_HEAL_MESSAGE_DEFAULT = ("DO NOT UNPLUG\nSYSTEM\nMAINTENANCE", None)  # watchdog: fail silently
 
 
-def ensure_fnm(reason=""):
+def ensure_fnm(reason="", show_splash=True):
     """Restore /opt/fnm if a Companion update deleted it. Offline-first (local
-    cache), download fallback, with an OLED 'self healing' splash. No-op (and
-    keeps the cache fresh) when already healthy. Serialized so concurrent
-    triggers (boot, watchdog, mode-switch) can't race."""
+    cache), download fallback. No-op (and keeps the cache fresh) when already
+    healthy. Serialized so concurrent triggers (boot, watchdog, mode-switch,
+    post-update) can't race. With show_splash=False it draws nothing - the
+    caller owns the screen (the unified update screen's FINALIZING stage).
+    Returns True when /opt/fnm is healthy/restored, False when it could not
+    be restored yet."""
+    global _fnm_last_impossible
     if not satellite_installed():
-        return
+        return True  # nothing to maintain on this unit
     if fnm_healthy():
         refresh_fnm_cache()
-        return
+        return True
     if not _fnm_heal_lock.acquire(blocking=False):
-        return  # a heal is already running
+        return True  # another trigger is already healing
     try:
         if fnm_healthy():  # re-check inside the lock
-            return
+            return True
+        splash_msg, fail_msg = _HEAL_MESSAGES.get(reason, _HEAL_MESSAGE_DEFAULT)
+        is_background = reason not in _HEAL_MESSAGES and show_splash
+
+        # Can we restore at all? Without a cache AND without internet there is
+        # nothing to do - don't flash splashes at the user (the watchdog would
+        # otherwise repeat them every 30s on an offline unit).
+        if not _cache_node_present() and not is_connected():
+            if is_background:
+                if time.monotonic() - _fnm_last_impossible > 600:
+                    _fnm_last_impossible = time.monotonic()
+                    logging.warning("ensure_fnm: broken but no cache and offline - waiting for internet")
+            else:
+                logging.warning(f"ensure_fnm: cannot restore ({reason}) - no cache and offline")
+                if show_splash and fail_msg:
+                    _show_heal_splash(fail_msg)
+                    time.sleep(3)
+                    _clear_heal_splash()
+            return False
+
         logging.warning(f"ensure_fnm: /opt/fnm missing - restoring ({reason})")
         # Run the restore in a thread so the splash can ANIMATE while it works.
         # A cache restore is a couple seconds, but a first-time download can take
@@ -3022,27 +3332,32 @@ def ensure_fnm(reason=""):
                 result['done'] = True
 
         try:
-            _draw_heal_frame("DO NOT UNPLUG\nSELF HEALING\nSATELLITE", 0)  # show at once
+            if show_splash:
+                _draw_heal_frame(splash_msg, 0)  # show at once
             threading.Thread(target=_do_restore, daemon=True).start()
             frame = 1
             while not result['done']:
-                _draw_heal_frame("DO NOT UNPLUG\nSELF HEALING\nSATELLITE", frame)
-                frame += 1
+                if show_splash:
+                    _draw_heal_frame(splash_msg, frame)
+                    frame += 1
                 time.sleep(0.2)
 
             if result['ok']:
-                _show_heal_splash("SATELLITE\nRESTORED")
-                time.sleep(2)
+                # No success splash - the update flow follows with
+                # "UPDATE COMPLETE", and background heals just return to normal.
                 if load_state().get('service') == 'satellite':
                     subprocess.run(['sudo', 'systemctl', 'restart', 'satellite'],
                                    capture_output=True, timeout=30)
                     logging.info("ensure_fnm: restarted satellite.service after restore")
             else:
-                logging.warning("ensure_fnm: no cache and offline - will retry when online")
-                _show_heal_splash("SATELLITE REPAIR\nNEEDS INTERNET")
-                time.sleep(3)
+                logging.warning(f"ensure_fnm: restore attempt failed ({reason}) - will retry")
+                if show_splash and fail_msg:
+                    _show_heal_splash(fail_msg)
+                    time.sleep(3)
+            return result['ok']
         finally:
-            _clear_heal_splash()
+            if show_splash:
+                _clear_heal_splash()
     finally:
         _fnm_heal_lock.release()
 
@@ -3053,7 +3368,7 @@ def _update_in_progress():
     try:
         if updating_application:
             return True
-        out = subprocess.run(['pgrep', '-f', 'companion-update|satellite-update|apt-get|dpkg'],
+        out = subprocess.run(['pgrep', '-f', r'companion-update|satellite-update|update\.sh|apt-get|dpkg'],
                              capture_output=True, text=True, timeout=5).stdout
         return bool(out.strip())
     except Exception:
@@ -3061,18 +3376,26 @@ def _update_in_progress():
 
 
 def fnm_watchdog_loop():
-    """Cause-agnostic self-heal: check /opt/fnm every 30s and rebuild it whenever
-    it's missing - regardless of how it was deleted (Companion update via any
-    path, corruption, etc.). No-op when healthy. Also keeps the offline cache fresh."""
+    """Every-30s guardian, no-op when all is well. Two duties:
+    1. fnm self-heal: rebuild /opt/fnm whenever it's missing - regardless of
+       how it was deleted (Companion update via any path, corruption, etc.).
+       Also keeps the offline restore cache fresh.
+    2. Single-app invariant: if Companion AND Satellite are ever active at the
+       same time (e.g. a manual `sudo companion-update` over SSH while in
+       Satellite mode), stop the one state.json doesn't name.
+    Both duties defer while an update is actively running, since updaters
+    legitimately cycle services mid-run."""
     logging.info("fnm watchdog started (30s)")
     while True:
         try:
             if satellite_installed():
-                if not fnm_healthy():
-                    if not _update_in_progress():
-                        ensure_fnm(reason="watchdog")
+                if _update_in_progress():
+                    pass  # let the updater finish; next tick cleans up
+                elif not fnm_healthy():
+                    ensure_fnm(reason="watchdog")
                 else:
                     refresh_fnm_cache()
+                    enforce_single_app_service()
         except Exception as e:
             logging.error(f"fnm_watchdog error: {e}")
         time.sleep(30)
@@ -3165,8 +3488,15 @@ def main():
     # Start the fullscreen kiosk GUI (if display is available)
     start_kiosk()
 
+    # Main heartbeat loop. Guarded like every other loop in the app: an
+    # unexpected error is logged and survived instead of killing the main
+    # thread (which would exit the whole app and blank the OLED/kiosk until
+    # systemd restarts it).
     while True:
-        execute_web_commands()
+        try:
+            execute_web_commands()
+        except Exception as e:
+            logging.error(f"Error in main web-command loop: {e}")
         time.sleep(.1)  # Check every 100ms
 
 def fast_adjust_ip(increment):
@@ -3335,7 +3665,6 @@ def activate_menu_item():
                 updating_application = True
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
@@ -3365,7 +3694,6 @@ def activate_menu_item():
                 updating_application = True
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
-                ensure_fnm(reason="post-app-update")
                 show_message("UPDATE COMPLETE", 2)
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)

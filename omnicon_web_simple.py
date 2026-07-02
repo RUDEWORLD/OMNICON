@@ -17,6 +17,7 @@ import secrets
 import psutil
 from datetime import datetime
 import threading
+import time
 import requests
 
 # Try to import SocketIO support - if not available, fall back to simple terminal
@@ -70,7 +71,7 @@ def load_config():
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
-    except:
+    except Exception:
         pass
     save_config(DEFAULT_CONFIG)
     return DEFAULT_CONFIG
@@ -81,7 +82,7 @@ def save_config(config):
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
         return True
-    except:
+    except Exception:
         return False
 
 def login_required(f):
@@ -101,7 +102,7 @@ def load_state():
     try:
         with open(STATE_FILE, 'r') as f:
             return json.load(f)
-    except:
+    except Exception:
         return {
             "service": "companion",
             "network": "STATIC",
@@ -148,16 +149,16 @@ def get_system_info():
 
         # Get temperature
         try:
-            temp_output = subprocess.check_output(["vcgencmd", "measure_temp"], text=True)
+            temp_output = subprocess.check_output(["vcgencmd", "measure_temp"], text=True, timeout=5)
             temp = temp_output.strip().split('=')[1]
-        except:
+        except Exception:
             temp = "N/A"
 
         # Get IP
         try:
-            ip_output = subprocess.check_output(["hostname", "-I"], text=True)
+            ip_output = subprocess.check_output(["hostname", "-I"], text=True, timeout=5)
             ip_address = ip_output.strip().split()[0] if ip_output.strip() else "N/A"
-        except:
+        except Exception:
             ip_address = "N/A"
 
         # Check which service is active from state
@@ -202,9 +203,9 @@ def get_network_settings():
 
         # Get current IP
         try:
-            ip_output = subprocess.check_output(["hostname", "-I"], text=True)
+            ip_output = subprocess.check_output(["hostname", "-I"], text=True, timeout=5)
             current_ip = ip_output.strip().split()[0] if ip_output.strip() else "N/A"
-        except:
+        except Exception:
             current_ip = "N/A"
 
         # Get actual network configuration
@@ -227,18 +228,18 @@ def get_network_settings():
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', b'eth0'))
                     interface = 'eth0'
-                except:
+                except Exception:
                     try:
                         # Try wlan0
                         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                         fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', b'wlan0'))
                         interface = 'wlan0'
-                    except:
+                    except Exception:
                         pass
 
                 # Get subnet mask using ip command
                 if interface:
-                    ip_info = subprocess.check_output(["ip", "addr", "show", interface], text=True)
+                    ip_info = subprocess.check_output(["ip", "addr", "show", interface], text=True, timeout=5)
                     for line in ip_info.split('\n'):
                         if 'inet ' in line and not 'inet6' in line:
                             # Extract IP and subnet from line like: inet 192.168.1.100/24 brd ...
@@ -252,7 +253,7 @@ def get_network_settings():
                                     actual_subnet = '.'.join([str((mask >> (8 * i)) & 0xff) for i in range(3, -1, -1)])
 
                 # Get gateway
-                route_output = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+                route_output = subprocess.check_output(["ip", "route", "show", "default"], text=True, timeout=5)
                 if route_output:
                     # Extract gateway from line like: default via 192.168.1.1 dev eth0 ...
                     parts = route_output.strip().split()
@@ -269,7 +270,7 @@ def get_network_settings():
                                 dns_servers.append(line.split()[1])
                         if dns_servers:
                             actual_dns = ', '.join(dns_servers[:2])  # Show first 2 DNS servers
-                except:
+                except Exception:
                     pass
 
             except Exception as e:
@@ -432,7 +433,7 @@ def get_fresh_system_time():
     # Use subprocess to get the actual system time (most reliable)
     try:
         result = subprocess.run(['date', '+%Y-%m-%d %H:%M:%S'],
-                              capture_output=True, text=True, check=True)
+                              capture_output=True, text=True, check=True, timeout=5)
         date_str = result.stdout.strip()
         # Parse: YYYY-MM-DD HH:MM:SS
         return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
@@ -482,7 +483,7 @@ def api_datetime():
         if not tz_detected:
             try:
                 # Try timedatectl show first (simpler output)
-                tz_output = subprocess.check_output(["timedatectl", "show", "--property=Timezone", "--value"], text=True)
+                tz_output = subprocess.check_output(["timedatectl", "show", "--property=Timezone", "--value"], text=True, timeout=5)
                 if tz_output.strip():
                     current_tz = tz_output.strip()
                     tz_detected = True
@@ -492,7 +493,7 @@ def api_datetime():
 
                 # Try timedatectl status
                 try:
-                    tz_output = subprocess.check_output(["timedatectl", "status"], text=True)
+                    tz_output = subprocess.check_output(["timedatectl", "status"], text=True, timeout=5)
                     for line in tz_output.split('\n'):
                         if 'Time zone:' in line:
                             # Extract timezone from line like "Time zone: America/New_York (EST, -0500)"
@@ -514,7 +515,7 @@ def api_datetime():
             try:
                 tz_list_output = subprocess.check_output(["timedatectl", "list-timezones"], text=True, timeout=10)
                 _timezone_list_cache = [tz.strip() for tz in tz_list_output.split('\n') if tz.strip()]
-            except:
+            except Exception:
                 _timezone_list_cache = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
                             "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney"]
         timezones = _timezone_list_cache
@@ -607,7 +608,7 @@ def api_timezone_debug():
     try:
         import getpass
         debug_info['current_user'] = getpass.getuser()
-    except:
+    except Exception:
         debug_info['current_user'] = 'unknown'
 
     return jsonify(debug_info)
@@ -628,7 +629,7 @@ def api_set_timezone():
             tz_list = subprocess.check_output(["timedatectl", "list-timezones"], text=True)
             if timezone not in tz_list:
                 return jsonify({"success": False, "error": f"Invalid timezone: {timezone}"}), 400
-        except:
+        except Exception:
             pass  # Continue anyway
 
         # Set timezone directly using timedatectl
@@ -648,7 +649,7 @@ def api_set_timezone():
                 try:
                     subprocess.run(["sudo", "bash", "-c", f"echo '{timezone}' > /etc/timezone"],
                                  capture_output=True, text=True)
-                except:
+                except Exception:
                     pass  # Not critical if this fails
 
                 # Notify omnicon.py to reload timezone so OLED updates immediately
@@ -1028,14 +1029,20 @@ if False:  # SOCKETIO_AVAILABLE disabled
             if self.fd:
                 try:
                     os.close(self.fd)
-                except:
+                except Exception:
                     pass
             if self.pid:
                 try:
                     os.kill(self.pid, 9)
                     os.waitpid(self.pid, os.WNOHANG)
-                except:
+                except Exception:
                     pass
+
+# Scrollback cap: without one, a long-running command (journalctl -f, ping)
+# grows session output without bound until the web process runs out of memory.
+TERMINAL_MAX_LINES = 2000
+TERMINAL_TRIM_TO = 1600
+
 
 class SimpleTerminalSession:
     """Manage a terminal session without WebSockets"""
@@ -1044,11 +1051,13 @@ class SimpleTerminalSession:
         self.process = None
         self.output = []
         self.running = False
+        self.last_activity = time.time()
 
     def start_command(self, command):
         """Start a terminal command"""
         try:
             self.running = True
+            self.last_activity = time.time()
             self.output = [f"$ {command}\n"]
 
             # Start the process
@@ -1069,10 +1078,14 @@ class SimpleTerminalSession:
                         line = self.process.stdout.readline()
                         if line:
                             self.output.append(line)
+                            self.last_activity = time.time()
+                            # Cap scrollback (keep the newest lines)
+                            if len(self.output) > TERMINAL_MAX_LINES:
+                                del self.output[1:len(self.output) - TERMINAL_TRIM_TO]
                         elif self.process.poll() is not None:
                             self.running = False
                             break
-                    except:
+                    except Exception:
                         break
 
             thread = threading.Thread(target=read_output, daemon=True)
@@ -1091,8 +1104,9 @@ class SimpleTerminalSession:
                 self.process.stdin.write(text + '\n')
                 self.process.stdin.flush()
                 self.output.append(f"> {text}\n")
+                self.last_activity = time.time()
                 return True
-            except:
+            except Exception:
                 return False
         return False
 
@@ -1116,7 +1130,7 @@ class SimpleTerminalSession:
                 if self.running:
                     self.process.stdin.flush()
                 return True
-            except:
+            except Exception:
                 return False
         return False
 
@@ -1134,7 +1148,7 @@ class SimpleTerminalSession:
                 time.sleep(0.5)
                 if self.process.poll() is None:
                     self.process.kill()
-            except:
+            except Exception:
                 pass
 
 # Omnicon Update API routes
@@ -1173,7 +1187,7 @@ def _check_omnicon_update_uncached():
                     if line.startswith("# V"):
                         current_version = line.strip().split(' ')[1]
                         break
-        except:
+        except Exception:
             current_version = "Unknown"
 
         # Fetch available versions from GitHub
@@ -1239,7 +1253,7 @@ def _check_omnicon_update_uncached():
                 current_tuple = tuple(map(int, current_version.lstrip('vV').split('.')))
                 latest_tuple = tuple(map(int, latest_version.lstrip('vV').split('.')))
                 update_available = latest_tuple > current_tuple
-            except:
+            except Exception:
                 pass
 
         return {
@@ -1294,7 +1308,7 @@ def api_get_versions():
                 match = re.match(r'^(\d+\.\d+\.\d+)', version)
                 if match:
                     companion_version = match.group(1)
-        except:
+        except Exception:
             pass
 
         # Get Satellite version
@@ -1307,7 +1321,7 @@ def api_get_versions():
                 match = re.match(r'^(\d+\.\d+\.\d+)', version)
                 if match:
                     satellite_version = match.group(1)
-        except:
+        except Exception:
             pass
 
         # Get Omnicon version
@@ -1318,7 +1332,7 @@ def api_get_versions():
                     if line.startswith("# V"):
                         omnicon_version = line.strip().split(' ')[1]
                         break
-        except:
+        except Exception:
             pass
 
         return jsonify({
@@ -1352,7 +1366,7 @@ def api_companion_available_versions():
                 match = re.match(r'^(\d+\.\d+\.\d+)', version)
                 if match:
                     current_version = match.group(1)
-        except:
+        except Exception:
             pass
 
         versions = []
@@ -1396,7 +1410,7 @@ def api_satellite_available_versions():
                 match = re.match(r'^(\d+\.\d+\.\d+)', version)
                 if match:
                     current_version = match.group(1)
-        except:
+        except Exception:
             pass
 
         versions = []
@@ -1603,7 +1617,7 @@ def api_wifi_scan():
                 parts = line.split(':')
                 if len(parts) >= 2 and parts[1] == '802-11-wireless':
                     known_networks.append(parts[0])
-        except:
+        except Exception:
             pass
 
         # Mark known networks
@@ -2096,6 +2110,14 @@ def start_terminal():
         # Stop existing session if any
         if session_id in terminal_sessions:
             terminal_sessions[session_id].stop()
+
+        # Prune dead sessions idle for >1h so old browsers' finished terminals
+        # (and their scrollback) don't accumulate in memory forever
+        now = time.time()
+        for sid in list(terminal_sessions):
+            s = terminal_sessions[sid]
+            if sid != session_id and not s.running and now - s.last_activity > 3600:
+                del terminal_sessions[sid]
 
         # Create new terminal session
         terminal = SimpleTerminalSession(session_id)
