@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.074
+# V4.2.075
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -3450,6 +3450,15 @@ def main():
     # This runs every boot but only takes action if expansion is needed.
     # The size check is instant and raspi-config --expand-rootfs is a no-op
     # on an already-expanded disk, so this is safe to run repeatedly.
+    #
+    # Two distinct cases are handled:
+    #   1. Partition smaller than the card (plain flash with Pi Imager etc.)
+    #      -> raspi-config --expand-rootfs grows the partition, then reboot.
+    #   2. Partition already fills the card but the ext4 filesystem inside is
+    #      still small (clones/restores from shrunk backups arrive this way —
+    #      the cloning tool pre-expands the partition, and the backup may
+    #      carry a stale firstboot marker). -> resize2fs grows the filesystem
+    #      online; no reboot needed.
     try:
         # Get total SD card size in bytes
         with open('/sys/block/mmcblk0/size', 'r') as f:
@@ -3477,7 +3486,23 @@ def main():
             else:
                 logging.error(f"Filesystem expand failed: {result.stderr}")
         else:
-            logging.info("Disk size OK, no expansion needed")
+            # Partition fills the card — now make sure the FILESYSTEM fills
+            # the partition (it won't after restoring a shrunk backup).
+            st = os.statvfs('/')
+            fs_size_gb = (st.f_frsize * st.f_blocks) / (1024 ** 3)
+            logging.info(f"Filesystem check: ext4={fs_size_gb:.1f}GB inside {part_size_gb:.1f}GB partition")
+            if part_size_gb > 0 and (fs_size_gb / part_size_gb) < 0.95:
+                logging.warning(f"Filesystem ({fs_size_gb:.1f}GB) is smaller than its partition ({part_size_gb:.1f}GB) - growing filesystem")
+                show_message("EXPANDING\nDISK...", 3)
+                result = subprocess.run(["sudo", "resize2fs", "/dev/mmcblk0p2"],
+                                        capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    logging.info("Filesystem grown to fill partition (online, no reboot needed)")
+                    show_message("DISK EXPANDED", 3)
+                else:
+                    logging.error(f"resize2fs failed: {result.stderr}")
+            else:
+                logging.info("Disk size OK, no expansion needed")
     except Exception as e:
         logging.error(f"Disk expansion check failed: {e}")
 
