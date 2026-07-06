@@ -529,12 +529,14 @@ $(document).ready(function() {
             loadDateTime();
         }, 1000); // Refresh every 1 second
 
-        // Update system info and network less frequently
+        // Update system info and network less frequently. The kiosk runs
+        // this page 24/7 for weeks - every request feeds WebKit/network
+        // churn, so keep this as slow as the UI can tolerate.
         setInterval(function() {
             loadSystemInfo();
             loadNetworkSettings();
             loadWifiStatus();  // Also refresh WiFi status
-        }, 5000); // Refresh every 5 seconds
+        }, 10000); // Refresh every 10 seconds
 
         // Check for all application versions every 30 seconds
         setInterval(function() {

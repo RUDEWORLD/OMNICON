@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.075
+# V4.2.076
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -38,13 +38,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 # ============================================================================
 KIOSK_PASSWORD = "3113"
 KIOSK_ENABLED = True
+# WebKit's child processes grow without bound when a page runs for weeks
+# (2026-07-06 tester freeze: network process at 2.6GB after 16 days, Pi
+# swap-thrashed to death). Above this limit WebKit kills the offending
+# child itself and the kiosk just reloads the page - a 1-2s flicker.
+KIOSK_WEBKIT_LIMIT_MB = 700
+
+# Live kiosk child, shared with the freeze guard (memory_guard) which
+# respawns it if it dies or its WebKit children run away.
+kiosk_lock = threading.Lock()
+kiosk_proc = None
+kiosk_expected = False
 
 def run_kiosk_gui():
     """Simple fullscreen GTK window with WebView inside."""
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('WebKit2', '4.1')
-    from gi.repository import Gtk, WebKit2
+    from gi.repository import Gtk, WebKit2, GLib
 
     # Get port from config
     port = 8080
@@ -64,10 +75,49 @@ def run_kiosk_gui():
     overlay = Gtk.Overlay()
     window.add(overlay)
 
-    # WebView with hardware acceleration disabled
-    webview = WebKit2.WebView()
+    # WebView in an ephemeral (no cache/cookie persistence - login is
+    # disabled so nothing is lost) context with a hard per-process memory
+    # limit: WebKit kills any of its children that reaches the limit, and
+    # the web-process-terminated handler below reloads the page.
+    try:
+        pressure = WebKit2.MemoryPressureSettings.new()
+        pressure.set_memory_limit(KIOSK_WEBKIT_LIMIT_MB)
+        # Default kill threshold is 0 = never kill, only prune caches
+        pressure.set_kill_threshold(1.0)
+        # Network process limit - must be installed before any context exists
+        WebKit2.WebsiteDataManager.set_memory_pressure_settings(pressure)
+        context = WebKit2.WebContext(
+            website_data_manager=WebKit2.WebsiteDataManager.new_ephemeral(),
+            memory_pressure_settings=pressure)
+        context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        webview = WebKit2.WebView.new_with_context(context)
+        logging.info(f"Kiosk WebKit memory limit active ({KIOSK_WEBKIT_LIMIT_MB}MB/process)")
+    except Exception as e:
+        logging.warning(f"Kiosk WebKit memory limit unavailable ({e}) - default WebView")
+        webview = WebKit2.WebView()
+
     settings = webview.get_settings()
     settings.set_property('hardware-acceleration-policy', WebKit2.HardwareAccelerationPolicy.NEVER)
+
+    # A killed/crashed web process leaves a blank view - reload to recover.
+    # Backs off if the page keeps dying so we never reload-loop.
+    terminations = []
+    def reload_after_terminate(view, reason):
+        now = time.monotonic()
+        terminations.append(now)
+        while terminations and now - terminations[0] > 300:
+            terminations.pop(0)
+        delay = 30 if len(terminations) > 5 else 2
+        logging.warning(f"Kiosk web process terminated ({reason}) - reloading in {delay}s")
+        def _do_reload():
+            view.reload()
+            return False  # one-shot GLib timeout
+        GLib.timeout_add_seconds(delay, _do_reload)
+    try:
+        webview.connect('web-process-terminated', reload_after_terminate)
+    except Exception as e:
+        logging.warning(f"Kiosk reload-on-crash handler unavailable: {e}")
+
     webview.load_uri(f'http://127.0.0.1:{port}')
     overlay.add(webview)
 
@@ -223,6 +273,7 @@ def ensure_autologin():
 
 def start_kiosk():
     """Start kiosk if display available."""
+    global kiosk_proc, kiosk_expected
     if not KIOSK_ENABLED:
         return None
 
@@ -271,11 +322,34 @@ def start_kiosk():
     import multiprocessing
     p = multiprocessing.Process(target=run_kiosk_gui, daemon=True)
     p.start()
+    with kiosk_lock:
+        kiosk_proc = p
+        kiosk_expected = True
     logging.info(f"Kiosk started (PID: {p.pid})")
     # Reap the kiosk when it exits: join() collects the child, so a closed or
     # crashed kiosk doesn't linger as a <defunct> zombie process.
     threading.Thread(target=p.join, daemon=True).start()
     return p
+
+
+def restart_kiosk(reason):
+    """Kill the kiosk child (its WebKit processes die with it, releasing
+    their memory) and start a fresh one. Called by the freeze guard - must
+    never raise. Only omnicon's own kiosk is touched here."""
+    global kiosk_proc
+    try:
+        logging.warning(f"Restarting kiosk: {reason}")
+        with kiosk_lock:
+            p = kiosk_proc
+        if p is not None and p.is_alive():
+            p.terminate()
+            p.join(10)
+            if p.is_alive():
+                p.kill()
+                p.join(5)
+        start_kiosk()
+    except Exception as e:
+        logging.error(f"Kiosk restart failed: {e}")
 
 # ============================================================================
 
@@ -2968,6 +3042,116 @@ def take_flight_sample():
     return sample
 
 
+# ============================================================================
+# FREEZE GUARD
+# Acts on each flight-recorder sample. Root cause of the 2026-07-06 tester
+# freeze: kiosk WebKit leaked to 2.6GB; the 200MB swap file absorbed the
+# pressure so the kernel OOM killer never fired, and the Pi swap-thrashed
+# for 2.5 days until power-cycled. The ladder below only ever touches
+# omnicon's own processes - Companion and Satellite are never stopped,
+# restarted, or resource-limited by anything here. No timers: every action
+# is triggered by measured memory state, so a healthy unit never sees any
+# of it fire.
+# ============================================================================
+GUARD_WEBKIT_RSS_MB = 1200      # restart kiosk if a WebKit child exceeds this
+GUARD_MEM_AVAIL_MB = 200        # "starved" = available RAM below this...
+GUARD_SWAP_PCT = 90.0           # ...while swap use is above this
+GUARD_KIOSK_AFTER_S = 120       # starved this long -> restart kiosk
+GUARD_EXIT_AFTER_S = 420        # still starved -> exit(1), systemd restarts us
+GUARD_KIOSK_COOLDOWN_S = 300    # min gap between guard-initiated kiosk restarts
+
+# last_restart is None until the guard's first restart: time.monotonic() is
+# seconds-since-boot, so seeding it with 0.0 would make the cooldown check
+# block the guard for the first GUARD_KIOSK_COOLDOWN_S after every boot
+_guard = {'starved_since': None, 'kiosk_done': False, 'last_restart': None}
+
+
+def _guard_event(event):
+    """Journal + flight-recorder marker so diagnostics zips show guard actions."""
+    logging.warning(f"FREEZE-GUARD: {event}")
+    try:
+        line = json.dumps({'ts': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                           'guard': event}, separators=(',', ':')) + '\n'
+        with open(FLIGHT_RECORDER_FILE, 'a') as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        pass
+
+
+def _guard_restart_kiosk(reason):
+    now = time.monotonic()
+    if (_guard['last_restart'] is not None
+            and now - _guard['last_restart'] < GUARD_KIOSK_COOLDOWN_S):
+        return
+    _guard['last_restart'] = now
+    _guard_event(reason)
+    restart_kiosk(reason)
+
+
+def memory_guard(sample):
+    """Escalating self-heal, called once per flight-recorder sample."""
+    global kiosk_expected
+    with kiosk_lock:
+        p, expected = kiosk_proc, kiosk_expected
+
+    # Kiosk exited. Clean exit = user closed it with the password - leave it
+    # closed. Anything else (crash, OOM kill) - bring it back.
+    if expected and p is not None and not p.is_alive():
+        if p.exitcode == 0:
+            with kiosk_lock:
+                kiosk_expected = False
+            _guard_event('kiosk closed cleanly - not respawning')
+        else:
+            _guard_restart_kiosk(f'kiosk died (exitcode {p.exitcode}) - respawning')
+        return
+
+    # A WebKit child evaded its own in-process limit: restart the kiosk.
+    if expected and p is not None:
+        try:
+            for child in psutil.Process(p.pid).children(recursive=True):
+                if child.name().startswith('WebKit'):
+                    rss_mb = child.memory_info().rss // (1024 * 1024)
+                    if rss_mb > GUARD_WEBKIT_RSS_MB:
+                        _guard_restart_kiosk(
+                            f'{child.name()} at {rss_mb}MB '
+                            f'(limit {GUARD_WEBKIT_RSS_MB}MB) - restarting kiosk')
+                        return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    # Whole system starved: restart the kiosk first; if memory stays starved
+    # (leak is elsewhere in our service), exit so systemd's Restart=always
+    # brings omnicon back fresh. Companion/Satellite run in their own
+    # services and are untouched by both steps.
+    starved = (sample.get('mem_avail_mb', 9999) < GUARD_MEM_AVAIL_MB
+               and sample.get('swap_pct', 0) > GUARD_SWAP_PCT)
+    if not starved:
+        _guard['starved_since'] = None
+        _guard['kiosk_done'] = False
+        return
+    now = time.monotonic()
+    if _guard['starved_since'] is None:
+        _guard['starved_since'] = now
+        return
+    starved_for = now - _guard['starved_since']
+    if starved_for >= GUARD_KIOSK_AFTER_S and not _guard['kiosk_done']:
+        _guard['kiosk_done'] = True
+        if expected:
+            _guard_restart_kiosk(
+                f'system starved {int(starved_for)}s (avail '
+                f'{sample["mem_avail_mb"]}MB, swap {sample["swap_pct"]}%) '
+                f'- restarting kiosk')
+        return
+    if starved_for >= GUARD_EXIT_AFTER_S:
+        _guard_event(
+            f'starvation persists after {int(starved_for)}s - exiting so '
+            f'systemd restarts omnicon (Companion/Satellite unaffected)')
+        time.sleep(1)  # let the journal line land before we vanish
+        os._exit(1)
+
+
 def flight_recorder_loop():
     """Daemon thread: append one JSON line per sample, fsync so it survives a
     hard freeze, rotate to keep size bounded. Must never crash omnicon."""
@@ -2975,6 +3159,7 @@ def flight_recorder_loop():
     os.makedirs(DIAG_DIR, exist_ok=True)
     logging.info(f"Flight recorder started ({FLIGHT_RECORDER_INTERVAL}s interval -> {FLIGHT_RECORDER_FILE})")
     while True:
+        sample = None
         try:
             sample = take_flight_sample()
             line = json.dumps(sample, separators=(',', ':')) + '\n'
@@ -2990,6 +3175,13 @@ def flight_recorder_loop():
             if time.monotonic() - last_error_log > 600:
                 last_error_log = time.monotonic()
                 logging.error(f"Flight recorder error: {e}")
+        if sample is not None:
+            try:
+                memory_guard(sample)
+            except Exception as e:
+                if time.monotonic() - last_error_log > 600:
+                    last_error_log = time.monotonic()
+                    logging.error(f"Freeze guard error: {e}")
         time.sleep(FLIGHT_RECORDER_INTERVAL)
 
 
@@ -3026,6 +3218,98 @@ def ensure_journald_config():
         logging.info("Journald configured: persistent storage, 256M cap")
     except Exception as e:
         logging.error(f"Failed to configure journald: {e}")
+
+
+OMNICON_MEMORY_DROPIN = '/etc/systemd/system/omnicon.service.d/omnicon-memory.conf'
+OMNICON_MEMORY_DROPIN_CONTENT = """# Written by Omnicon - freeze guard kernel backstop
+# Caps omnicon.service (including the kiosk's WebKit children) so a runaway
+# leak can never drag the whole Pi into the swap-thrash death spiral. When
+# the cap is hit the kernel OOM-kills the biggest process in this service
+# only (always the leaking WebKit child); OOMPolicy=continue keeps the
+# service itself running. Companion/Satellite are separate services with no
+# limits - they are unaffected by this file.
+[Service]
+MemoryMax=2G
+MemorySwapMax=64M
+OOMPolicy=continue
+"""
+
+
+def ensure_memory_guardrails():
+    """Kernel-enforced memory cap on omnicon.service via a systemd drop-in.
+    Idempotent: writes/reloads only when the drop-in is missing or outdated.
+    set-property --runtime applies the cap to the already-running unit so no
+    service restart is needed; the drop-in makes it stick across reboots."""
+    try:
+        try:
+            with open(OMNICON_MEMORY_DROPIN, 'r') as f:
+                if f.read() == OMNICON_MEMORY_DROPIN_CONTENT:
+                    return
+        except FileNotFoundError:
+            pass
+        subprocess.run(['sudo', 'mkdir', '-p', os.path.dirname(OMNICON_MEMORY_DROPIN)],
+                       capture_output=True, timeout=15)
+        result = subprocess.run(['sudo', 'tee', OMNICON_MEMORY_DROPIN],
+                                input=OMNICON_MEMORY_DROPIN_CONTENT,
+                                capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            logging.error(f"Failed to write memory drop-in: {result.stderr}")
+            return
+        subprocess.run(['sudo', 'systemctl', 'set-property', '--runtime',
+                        'omnicon.service', 'MemoryMax=2G', 'MemorySwapMax=64M'],
+                       capture_output=True, timeout=15)
+        # Reload last so the runtime drop-ins from set-property are picked up
+        # and systemd doesn't warn "unit changed on disk"
+        subprocess.run(['sudo', 'systemctl', 'daemon-reload'],
+                       capture_output=True, timeout=60)
+        logging.info("Memory guardrails applied: omnicon.service MemoryMax=2G")
+    except Exception as e:
+        logging.error(f"Failed to apply memory guardrails: {e}")
+
+
+CMDLINE_FILE = '/boot/firmware/cmdline.txt'
+
+
+def ensure_memory_cgroup():
+    """Make the kernel's cgroup memory controller available.
+
+    Raspberry Pi firmware injects `cgroup_disable=memory` into the kernel
+    command line by default, which makes MemoryMax silently unenforceable
+    (systemd stores it, the kernel ignores it). Appending
+    `cgroup_enable=memory` to cmdline.txt overrides the firmware default -
+    the documented Raspberry Pi way. Takes effect on the next reboot; until
+    then the freeze guard's process-level layers still protect the unit.
+    Idempotent, append-only (never removes or reorders existing tokens),
+    and restores the backup if the written file fails verification."""
+    try:
+        with open('/proc/cmdline') as f:
+            if 'cgroup_disable=memory' not in f.read().split():
+                return  # controller already available on this boot
+        with open(CMDLINE_FILE) as f:
+            original = f.read()
+        line = original.rstrip('\n')
+        if 'cgroup_enable=memory' in line.split():
+            logging.info("Memory cgroup enabled in cmdline.txt - arms on next reboot")
+            return
+        subprocess.run(['sudo', 'cp', CMDLINE_FILE, CMDLINE_FILE + '.omnicon-bak'],
+                       capture_output=True, timeout=15)
+        desired = line + ' cgroup_enable=memory\n'
+        result = subprocess.run(['sudo', 'tee', CMDLINE_FILE], input=desired,
+                                capture_output=True, text=True, timeout=15)
+        with open(CMDLINE_FILE) as f:
+            written = f.read()
+        # cmdline.txt must stay a single line and keep every original token -
+        # a malformed file can make the unit unbootable, so verify hard and
+        # roll back on any mismatch.
+        if result.returncode != 0 or written != desired or '\n' in written[:-1]:
+            subprocess.run(['sudo', 'cp', CMDLINE_FILE + '.omnicon-bak', CMDLINE_FILE],
+                           capture_output=True, timeout=15)
+            logging.error("cmdline.txt update failed verification - restored backup")
+            return
+        logging.info("Enabled memory cgroup controller in cmdline.txt - "
+                     "kernel memory cap arms on next reboot")
+    except Exception as e:
+        logging.error(f"Failed to enable memory cgroup: {e}")
 
 
 def disable_os_auto_upgrades():
@@ -3434,6 +3718,13 @@ def main():
 
     # Stop Debian's unattended OS upgrades - the cause of the morning freezes
     disable_os_auto_upgrades()
+
+    # Kernel backstop for the freeze guard: cap this service's memory so a
+    # WebKit (or any omnicon) leak can never swap-thrash the whole Pi.
+    # Pi firmware disables the kernel memory controller by default, so also
+    # enable it (effective from the unit's next reboot).
+    ensure_memory_cgroup()
+    ensure_memory_guardrails()
 
     # Self-heal Satellite's fnm runtime if a Companion update deleted it.
     # Watchdog thread: checks on start + every 30s, offline-first restore.

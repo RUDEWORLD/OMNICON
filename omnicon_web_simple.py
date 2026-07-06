@@ -1486,11 +1486,22 @@ def api_update_satellite():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # WiFi Management API routes
+# Each status call forks nmcli twice plus ip once, and the kiosk page polls
+# it around the clock - serve a short-lived cache so concurrent viewers
+# share one probe instead of stacking subprocess forks.
+_wifi_status_cache = {'t': 0.0, 'data': None}
+WIFI_STATUS_CACHE_S = 5
+
+
 @app.route('/api/wifi/status')
 @login_required
 def api_wifi_status():
     """Get current WiFi status"""
     try:
+        if (_wifi_status_cache['data'] is not None
+                and time.monotonic() - _wifi_status_cache['t'] < WIFI_STATUS_CACHE_S):
+            return jsonify(_wifi_status_cache['data'])
+
         # Check if WiFi is enabled
         wifi_enabled = False
         wifi_connected = False
@@ -1543,13 +1554,16 @@ def api_wifi_status():
             except Exception as e:
                 logging.error(f"Error getting WiFi IP: {e}")
 
-        return jsonify({
+        data = {
             "enabled": wifi_enabled,
             "connected": wifi_connected,
             "ssid": wifi_ssid,
             "ip": wifi_ip,
             "signal": wifi_signal
-        })
+        }
+        _wifi_status_cache['data'] = data
+        _wifi_status_cache['t'] = time.monotonic()
+        return jsonify(data)
 
     except Exception as e:
         logging.error(f"Error getting WiFi status: {e}")
