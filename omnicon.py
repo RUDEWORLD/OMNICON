@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.076
+# V4.2.077
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -1802,6 +1802,8 @@ def debounce(func):
 def button_k1_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     global app_version_cursor, app_version_scroll
+    if updating_application or message_displayed:
+        return  # an update/splash owns the screen - ignore presses
     logging.debug("K1 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1840,6 +1842,8 @@ def button_k1_pressed():
 def button_k2_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, datetime_temp
     global app_version_cursor, app_version_scroll
+    if updating_application or message_displayed:
+        return  # an update/splash owns the screen - ignore presses
     logging.debug("K2 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1882,6 +1886,8 @@ def button_k2_pressed():
 def button_k3_pressed():
     global menu_state, menu_selection, ip_octet, last_interaction_time, timeout_flag, updating_application
     global app_version_list, app_version_scroll, app_version_cursor
+    if updating_application or message_displayed:
+        return  # an update/splash owns the screen - ignore presses
     logging.debug("K3 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False
@@ -1926,6 +1932,8 @@ def button_k4_pressed():
     global datetime_temp, last_interaction_time, time_format_24hr, selected_version, timeout_flag
     global updating_application  # was missing: its assignment below created a LOCAL,
     # so the display loop kept fighting the update screen (rapid flashing)
+    if updating_application or message_displayed:
+        return  # an update/splash owns the screen - ignore presses
     logging.debug("K4 pressed")
     last_interaction_time = time.monotonic()
     timeout_flag = False  # Reset timeout flag
@@ -1981,6 +1989,8 @@ def button_k4_pressed():
                 execute_command_with_progress(update_cmd)
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2689,6 +2699,8 @@ def execute_web_commands():
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2702,6 +2714,8 @@ def execute_web_commands():
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2714,6 +2728,8 @@ def execute_web_commands():
                 execute_command_with_progress('sudo companion-update beta')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2726,6 +2742,8 @@ def execute_web_commands():
                 execute_command_with_progress('sudo satellite-update beta')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2739,6 +2757,8 @@ def execute_web_commands():
                 execute_command_with_progress(build_versioned_update_command('companion', version))
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2752,6 +2772,8 @@ def execute_web_commands():
                 execute_command_with_progress(build_versioned_update_command('satellite', version))
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -2895,6 +2917,8 @@ def process_web_commands():
                             execute_command_with_progress('sudo companion-update stable')
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -2907,6 +2931,8 @@ def process_web_commands():
                             execute_command_with_progress('sudo satellite-update stable')
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -2918,6 +2944,8 @@ def process_web_commands():
                             execute_command_with_progress('sudo companion-update beta')
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -2929,6 +2957,8 @@ def process_web_commands():
                             execute_command_with_progress('sudo satellite-update beta')
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -2941,6 +2971,8 @@ def process_web_commands():
                             execute_command_with_progress(build_versioned_update_command('companion', version))
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -2953,6 +2985,8 @@ def process_web_commands():
                             execute_command_with_progress(build_versioned_update_command('satellite', version))
                             updating_application = False
                             show_message("UPDATE COMPLETE", 2)
+                            menu_state = "default"
+                            menu_selection = 0
                         else:
                             show_message("PLEASE CONNECT\nTO INTERNET", 3)
 
@@ -3982,6 +4016,8 @@ def activate_menu_item():
                 execute_command_with_progress('sudo companion-update stable')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
@@ -4011,6 +4047,8 @@ def activate_menu_item():
                 execute_command_with_progress('sudo satellite-update stable')
                 updating_application = False
                 show_message("UPDATE COMPLETE", 2)
+                menu_state = "default"
+                menu_selection = 0
             else:
                 show_message("PLEASE CONNECT\nTO INTERNET", 3)
                 menu_state = "default"
