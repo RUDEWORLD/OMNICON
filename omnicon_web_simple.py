@@ -282,21 +282,39 @@ def get_network_settings():
                 "static_ip": '.'.join(map(str, state.get("static_ip", [192, 168, 0, 100]))),
                 "static_subnet": '.'.join(map(str, state.get("subnet_mask", [255, 255, 255, 0]))),
                 "static_gateway": '.'.join(map(str, state.get("gateway", [192, 168, 0, 1]))),
+                "static_dns": state.get("dns") or "",
                 "actual_subnet": actual_subnet,
                 "actual_gateway": actual_gateway,
                 "actual_dns": actual_dns,
                 "network_mode": network_mode
             }
         else:
-            # In STATIC mode, return configured values
+            # In STATIC mode, return configured values. DNS is read back from
+            # the live profile (previously hardcoded "N/A", so a saved DNS
+            # server never showed up in the GUI); falls back to the saved value.
+            saved_dns = state.get("dns") or ""
+            actual_dns = "N/A"
+            try:
+                out = subprocess.run(
+                    ["nmcli", "-g", "ipv4.dns", "connection", "show", "STATIC"],
+                    capture_output=True, text=True, timeout=5).stdout.strip()
+                live = [d for d in out.replace(",", " ").split() if d]
+                if live:
+                    actual_dns = ", ".join(live[:2])
+                elif saved_dns:
+                    actual_dns = saved_dns
+            except Exception:
+                if saved_dns:
+                    actual_dns = saved_dns
             return {
                 "current_ip": current_ip,
                 "static_ip": '.'.join(map(str, state.get("static_ip", [192, 168, 0, 100]))),
                 "static_subnet": '.'.join(map(str, state.get("subnet_mask", [255, 255, 255, 0]))),
                 "static_gateway": '.'.join(map(str, state.get("gateway", [192, 168, 0, 1]))),
+                "static_dns": saved_dns,
                 "actual_subnet": '.'.join(map(str, state.get("subnet_mask", [255, 255, 255, 0]))),
                 "actual_gateway": '.'.join(map(str, state.get("gateway", [192, 168, 0, 1]))),
-                "actual_dns": "N/A",
+                "actual_dns": actual_dns,
                 "network_mode": network_mode
             }
     except Exception as e:

@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.077
+# V4.2.078
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -2064,7 +2064,11 @@ def apply_static_settings(dns_server=None):
     sm_str = '.'.join(map(str, subnet_mask))
     gw_str = '.'.join(map(str, gateway))
     cidr = subnet_mask_to_cidr(sm_str)
-    # Use provided DNS or default to gateway
+    # DNS precedence: explicit argument > the user's SAVED dns > gateway.
+    # Previously any caller without an argument (OLED menu, toggle_network)
+    # silently reset a user-set DNS back to the gateway.
+    if not dns_server:
+        dns_server = load_state().get("dns")
     dns_str = dns_server if dns_server else gw_str
     execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.addresses {ip_str}/{cidr}")
     execute_command(f"sudo nmcli connection modify {STATIC_PROFILE} ipv4.gateway {gw_str}")
@@ -2621,9 +2625,12 @@ def execute_web_commands():
             def apply_settings():
                 save_static_settings()
                 apply_static_settings(dns_str)
-                # Also update network mode to STATIC in state
+                # Also update network mode to STATIC in state, and PERSIST the
+                # DNS server (it was previously applied to the profile but never
+                # saved, so the GUI could never show it and re-applies lost it)
                 state = load_state()
                 state["network"] = "STATIC"
+                state["dns"] = dns_str
                 save_state(state)
                 logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 
@@ -2835,9 +2842,11 @@ def process_web_commands():
 
                         save_static_settings()
                         apply_static_settings(dns_str)
-                        # Also update network mode to STATIC in state
+                        # Also update network mode to STATIC in state, and
+                        # PERSIST the DNS server (see execute_web_commands)
                         state = load_state()
                         state["network"] = "STATIC"
+                        state["dns"] = dns_str
                         save_state(state)
                         logging.info(f"Applied static IP settings via web with DNS: {dns_str}")
 

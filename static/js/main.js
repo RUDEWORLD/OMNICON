@@ -205,6 +205,7 @@ function updateNetworkDisplay(data) {
         $('#staticIp').val(data.static_ip || '');
         $('#staticSubnet').val(data.static_subnet || '');
         $('#staticGateway').val(data.static_gateway || '');
+        $('#staticDns').val(data.static_dns || '');  // show the saved DNS, not blank
     }
 }
 
