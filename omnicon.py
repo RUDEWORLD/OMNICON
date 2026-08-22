@@ -1,6 +1,6 @@
 # CREATED BY PHILLIP RUDE
 # FOR OMNICON DUO PI, MONO PI, & HUB
-# V4.2.078
+# V4.2.079
 # 12/24/2024
 # -*- coding: utf-8 -*-
 # NOT FOR DISTRIBUTION OR USE OUTSIDE OF OMNICON PRODUCTS
@@ -27,6 +27,7 @@ import re
 import socket
 import zipfile
 import shutil
+import shlex
 
 # Set up logging
 # INFO level: DEBUG floods the journal with ~3 lines/sec of OLED refresh noise,
@@ -688,6 +689,22 @@ def enforce_single_app_service():
         logging.error(f"enforce_single_app_service failed: {e}")
 
 
+def ensure_mode_service_running():
+    """After an update, make sure the app that state.json names is actually
+    running. Bitfocus's update wrappers are `bash -e`: if any early step fails
+    (git pull, a starved cgroup...) they stop the service and never restart it
+    - seen in the field as a unit stuck on SYSTEM OFF after 'Update Companion'."""
+    try:
+        mode = load_state().get('service', 'companion')
+        if mode == 'satellite' and not fnm_healthy():
+            return  # no runtime yet; the fnm heal restarts satellite when it succeeds
+        if not is_service_active(f"{mode}.service"):
+            logging.warning(f"{mode}.service not running after update - starting it")
+            subprocess.run(['sudo', 'systemctl', 'start', mode], capture_output=True, timeout=60)
+    except Exception as e:
+        logging.error(f"ensure_mode_service_running failed: {e}")
+
+
 def toggle_service(service=None):
     state = load_state()
     if service:
@@ -1165,7 +1182,8 @@ def execute_command_with_progress(command):
     times = _load_update_times(app)
     updating_application = True
     try:
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE,
+        # Run the updater OUTSIDE omnicon.service's memory cap (see unconfined())
+        process = subprocess.Popen(unconfined_shell(command), shell=True, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True)
         state = {'done': False, 'phase': 'PREPARING', 'dl_pct': None}
         phase_started = {'PREPARING': time.monotonic()}
@@ -1243,6 +1261,9 @@ def execute_command_with_progress(command):
                 # The wrapper just unconditionally started the app it updated,
                 # even if this unit is in the OTHER mode - kill any dual-run.
                 enforce_single_app_service()
+                # ...and if the wrapper aborted early (bash -e) it STOPPED the
+                # app and never restarted it - never leave the unit SYSTEM OFF.
+                ensure_mode_service_running()
             finally:
                 heal['done'] = True
 
@@ -3446,13 +3467,89 @@ def fnm_healthy():
     return os.path.exists(FNM_BIN) and os.path.exists(FNM_DEFAULT_NODE)
 
 
+# ---- Running maintenance work OUTSIDE omnicon.service's cgroup --------------
+# omnicon.service carries MemoryMax=2G (the freeze guard). Anything we spawn via
+# sudo stays INSIDE that cgroup, so once the kiosk's WebKit plus the page cache
+# from a 200MB cache copy pin the cgroup at its cap, our own heals AND the
+# Companion/Satellite updaters run starved (seen in the field: every fnm
+# restore failing in <1s, companion-update dying 3s in and leaving the unit on
+# SYSTEM OFF). `systemd-run --scope` moves a command into a transient scope
+# under system.slice while keeping stdio attached, so pipes/progress still work.
+_UNCONFINED_PREFIX = ['sudo', 'systemd-run', '--scope', '--quiet', '--collect',
+                      '-p', 'MemoryMax=infinity', '-p', 'MemorySwapMax=infinity', '--']
+
+
+def unconfined(cmd_list):
+    """argv to run `cmd_list` (as root) outside omnicon.service's memory cap."""
+    return _UNCONFINED_PREFIX + list(cmd_list)
+
+
+def unconfined_shell(command):
+    """Same for a shell command string (an inner 'sudo ...' is harmless as root)."""
+    return ' '.join(_UNCONFINED_PREFIX) + ' bash -c ' + shlex.quote(command)
+
+
+def _run_logged(label, cmd_list, timeout):
+    """Run a command unconfined, capture output, and LOG stderr on failure
+    (truncated) so a diagnostics zip explains itself. Returns the
+    CompletedProcess, or None on timeout/exception."""
+    try:
+        r = subprocess.run(unconfined(cmd_list), capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or '').strip().replace('\n', ' | ')[-300:]
+            logging.error(f"{label} failed rc={r.returncode}: {err}")
+        return r
+    except subprocess.TimeoutExpired:
+        logging.error(f"{label} timed out after {timeout}s")
+    except Exception as e:
+        logging.error(f"{label} error: {e}")
+    return None
+
+
 def _fnm_reconcile():
     """Run satellite's own non-interactive fnm setup (mirrors pi-image/update.sh
     lines 19-27): install the pinned Node if missing and (re)point the default
-    alias. Offline-safe when the Node is already on disk (e.g. after a cache copy)."""
+    alias. Offline-safe when the Node is already on disk (e.g. after a cache
+    copy). Returns True on success; stderr is journaled on failure."""
     cmd = (f'set -e; cd "{SATELLITE_SRC}"; export FNM_DIR={FNM_DIR}; export PATH={FNM_DIR}:$PATH; '
            'eval "$(fnm env)"; fnm use --install-if-missing; fnm default "$(fnm current)"')
-    subprocess.run(['sudo', 'bash', '-c', cmd], capture_output=True, text=True, timeout=300)
+    r = _run_logged("fnm reconcile", ['bash', '-c', cmd], timeout=300)
+    return bool(r and r.returncode == 0)
+
+
+def _ensure_default_alias():
+    """fnm-proof fallback: point aliases/default at the best Node already on
+    disk under /opt/fnm (satellite's pinned .node-version if present, else the
+    newest). Needs no fnm binary and no network, so a cache restore succeeds
+    even when `fnm use` can't run (starved cgroup, stale pin, blocked download)."""
+    import glob
+    installs = [p for p in glob.glob(os.path.join(FNM_DIR, 'node-versions', '*', 'installation'))
+                if os.path.exists(os.path.join(p, 'bin', 'node'))]
+    if not installs:
+        return False
+    want = None
+    try:
+        with open(os.path.join(SATELLITE_SRC, '.node-version')) as f:
+            want = f.read().strip().lstrip('vV')
+    except OSError:
+        pass
+
+    def ver_of(p):
+        return os.path.basename(os.path.dirname(p)).lstrip('vV')
+
+    def vkey(p):
+        try:
+            return tuple(int(x) for x in ver_of(p).split('.'))
+        except ValueError:
+            return (0,)
+    pick = next((p for p in installs if want and ver_of(p) == want), None) or max(installs, key=vkey)
+    alias_dir = os.path.join(FNM_DIR, 'aliases')
+    r = _run_logged("fnm default alias",
+                    ['bash', '-c', f'mkdir -p "{alias_dir}" && ln -sfn "{pick}" "{alias_dir}/default"'],
+                    timeout=15)
+    if r and r.returncode == 0:
+        logging.info(f"fnm default alias set manually -> {pick}")
+    return fnm_healthy()
 
 
 def _cache_node_present():
@@ -3480,24 +3577,38 @@ def refresh_fnm_cache():
                         return  # cache already current
             except OSError:
                 pass
-        subprocess.run(['sudo', 'rm', '-rf', FNM_CACHE], capture_output=True, timeout=60)
-        subprocess.run(['sudo', 'cp', '-a', FNM_DIR, FNM_CACHE], capture_output=True, timeout=180)
-        subprocess.run(['sudo', 'bash', '-c', f'echo "{target}" > "{stamp}"'], capture_output=True, timeout=10)
+        _run_logged("fnm cache clear", ['rm', '-rf', FNM_CACHE], timeout=120)
+        r = _run_logged("fnm cache snapshot",
+                        ['nice', '-n', '10', 'ionice', '-c', '2', '-n', '7', 'cp', '-a', FNM_DIR, FNM_CACHE],
+                        timeout=900)
+        if not r or r.returncode != 0:
+            return
+        _run_logged("fnm cache stamp", ['bash', '-c', f'echo "{target}" > "{stamp}"'], timeout=10)
         logging.info(f"fnm cache refreshed ({target})")
     except Exception as e:
         logging.error(f"refresh_fnm_cache failed: {e}")
 
 
 def _restore_fnm_from_cache():
-    """Copy the cached /opt/fnm back into place (offline). Returns True on success."""
+    """Copy the cached /opt/fnm back into place (offline). Returns True on success.
+    A Node left on disk by a previous attempt is reused rather than re-copying
+    200MB on every retry (which ground the SD card in the field)."""
     if not _cache_node_present():
         return False
     try:
-        subprocess.run(['sudo', 'rm', '-rf', FNM_DIR], capture_output=True, timeout=60)
-        subprocess.run(['sudo', 'cp', '-a', FNM_CACHE, FNM_DIR], capture_output=True, timeout=180)
-        subprocess.run(['sudo', 'rm', '-f', os.path.join(FNM_DIR, '.source')], capture_output=True, timeout=10)
-        _fnm_reconcile()  # fix the default alias; Node already on disk so no download
-        return fnm_healthy()
+        import glob
+        have_node = glob.glob(os.path.join(FNM_DIR, 'node-versions', '*', 'installation', 'bin', 'node'))
+        if not (have_node and os.path.exists(FNM_BIN)):
+            _run_logged("fnm restore clear", ['rm', '-rf', FNM_DIR], timeout=120)
+            r = _run_logged("fnm restore copy",
+                            ['nice', '-n', '10', 'ionice', '-c', '2', '-n', '7', 'cp', '-a', FNM_CACHE, FNM_DIR],
+                            timeout=900)
+            if not r or r.returncode != 0:
+                return False
+            _run_logged("fnm restore stamp rm", ['rm', '-f', os.path.join(FNM_DIR, '.source')], timeout=10)
+        if _fnm_reconcile() and fnm_healthy():
+            return True
+        return _ensure_default_alias()  # fnm-proof fallback
     except Exception as e:
         logging.error(f"_restore_fnm_from_cache failed: {e}")
         return False
@@ -3509,11 +3620,12 @@ def _restore_fnm_by_download():
         install = ('set -e; mkdir -p /opt/fnm; '
                    f'curl -fsSL "{FNM_URL}" -o /tmp/fnm.zip; cd /tmp && unzip -o fnm.zip; '
                    'install -m 755 fnm /opt/fnm/fnm; rm -f /tmp/fnm.zip /tmp/fnm')
-        subprocess.run(['sudo', 'bash', '-c', install], capture_output=True, text=True, timeout=180)
+        _run_logged("fnm binary install", ['bash', '-c', install], timeout=180)
         if not os.path.exists(FNM_BIN):
             return False
-        _fnm_reconcile()
-        return fnm_healthy()
+        if _fnm_reconcile() and fnm_healthy():
+            return True
+        return _ensure_default_alias()  # fnm-proof fallback
     except Exception as e:
         logging.error(f"_restore_fnm_by_download failed: {e}")
         return False
@@ -3588,6 +3700,9 @@ def _draw_heal_frame(message, frame):
 
 _fnm_heal_lock = threading.Lock()
 _fnm_last_impossible = 0.0  # backoff stamp: broken but offline with no cache
+_fnm_fail_count = 0         # consecutive failed restore attempts
+_fnm_retry_after = 0.0      # background attempts are skipped until this time
+FNM_HEAL_BACKOFF_SECS = 600  # after 2 straight failures: retry every 10 min, silently
 
 # What the splash says depends on what the USER was doing - satellite wording
 # when they chose satellite, neutral wording for background repairs (a
@@ -3608,10 +3723,12 @@ def ensure_fnm(reason="", show_splash=True):
     caller owns the screen (the unified update screen's FINALIZING stage).
     Returns True when /opt/fnm is healthy/restored, False when it could not
     be restored yet."""
-    global _fnm_last_impossible
+    global _fnm_last_impossible, _fnm_fail_count, _fnm_retry_after
     if not satellite_installed():
         return True  # nothing to maintain on this unit
     if fnm_healthy():
+        _fnm_fail_count = 0
+        _fnm_retry_after = 0.0
         refresh_fnm_cache()
         return True
     if not _fnm_heal_lock.acquire(blocking=False):
@@ -3621,6 +3738,13 @@ def ensure_fnm(reason="", show_splash=True):
             return True
         splash_msg, fail_msg = _HEAL_MESSAGES.get(reason, _HEAL_MESSAGE_DEFAULT)
         is_background = reason not in _HEAL_MESSAGES and show_splash
+        # Backoff: a background (watchdog) heal that keeps failing must not
+        # loop every 30s flashing the maintenance splash and re-copying the
+        # cache - after 2 straight failures it retries every 10 min, silently.
+        if is_background and time.monotonic() < _fnm_retry_after:
+            return False
+        if is_background and _fnm_fail_count >= 2:
+            show_splash = False
 
         # Can we restore at all? Without a cache AND without internet there is
         # nothing to do - don't flash splashes at the user (the watchdog would
@@ -3670,6 +3794,8 @@ def ensure_fnm(reason="", show_splash=True):
                 time.sleep(0.2)
 
             if result['ok']:
+                _fnm_fail_count = 0
+                _fnm_retry_after = 0.0
                 # No success splash - the update flow follows with
                 # "UPDATE COMPLETE", and background heals just return to normal.
                 if load_state().get('service') == 'satellite':
@@ -3677,7 +3803,13 @@ def ensure_fnm(reason="", show_splash=True):
                                    capture_output=True, timeout=30)
                     logging.info("ensure_fnm: restarted satellite.service after restore")
             else:
-                logging.warning(f"ensure_fnm: restore attempt failed ({reason}) - will retry")
+                _fnm_fail_count += 1
+                if _fnm_fail_count >= 2:
+                    _fnm_retry_after = time.monotonic() + FNM_HEAL_BACKOFF_SECS
+                    logging.warning(f"ensure_fnm: restore attempt failed ({reason}) - "
+                                    f"{_fnm_fail_count} in a row, backing off {FNM_HEAL_BACKOFF_SECS // 60} min")
+                else:
+                    logging.warning(f"ensure_fnm: restore attempt failed ({reason}) - will retry")
                 if show_splash and fail_msg:
                     _show_heal_splash(fail_msg)
                     time.sleep(3)
